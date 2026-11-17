@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  alignment-service:
+    build: .
+    container_name: railway_alignment_service
+    ports:
+      - "8001:8001"
+    restart: always
+    environment:
+      - PORT=8001
+      - ESP_CORS_ORIGINS=http://localhost:4200,http://127.0.0.1:4200,https://bridge-gad-dev.aagento.ai,https://gad-engine.web.app
+    volumes:
+      - ./storage:/app/storage
+

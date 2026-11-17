@@ -1,0 +1,83 @@
+# Railway Alignment Designer Configuration
+# Strictly Horizontal Geometry & Track Standards
+
+railway_standards:
+  gauge_type: "BG"                    # Broad Gauge (1676 mm)
+  track_gauge_mm: 1676.0              # Nominal gauge
+  dynamic_gauge_mm: 1750.0            # Dynamic gauge G (used for cant formula: G*V^2 / 127*R)
+  default_design_speed_kmh: 160.0     # Default line speed for cant calculation (RDSO Group A High Speed: 160 km/h)
+  chainage_interval_m: 20.0           # Standard 20m station pegging
+  station_chainage_precision: 2       # Decimal places for pegged station chainages (m)
+  projected_coord_precision: 3        # Decimal places for UTM Easting/Northing (m)
+  geodetic_coord_precision: 7         # Decimal places for WGS84 Lon/Lat (deg)
+  terminal_station_min_gap_m: 0.01    # Minimum remaining span before appending final end-point station (m)
+
+curve_standards:
+  max_cant_actual_mm: 165.0           # Maximum permissible actual cant (Ca)
+  max_cant_deficiency_mm: 75.0        # Maximum permissible cant deficiency (Cd)
+  max_cant_excess_mm: 75.0            # Maximum permissible cant excess (Ce)
+  transition_type: "CUBIC_PARABOLA"   # RDSO standard: y = x^3 / (6*R*L)
+  transition_chord_step_m: 5.0        # Segment step along transition spiral (m)
+  min_deflection_threshold_deg: 0.05  # Angles below this are treated as zero deflection (tangent)
+  default_simplification_tolerance_m: 5.0  # Default /detect RDP noise cleanup tolerance (m)
+  default_minimum_deflection_deg: 1.0      # Default /detect minimum bend turn angle (deg)
+  min_transition_deflection_deg: 0.5  # Below this deflection angle, transition spirals are omitted (simple circular curve)
+  max_transition_spiral_ratio: 0.425  # Max deflection angle fraction per transition spiral (ensures circular arc >= 15%)
+  cant_formula_divisor: 127.0         # Metric equilibrium cant divisor (G*V^2 / 127*R)
+  cant_round_step_mm: 5.0             # IRPWM equilibrium/actual cant rounding increment (mm)
+  high_speed_threshold_kmh: 120.0     # Speed threshold dividing rate-of-gain coefficients (km/h)
+  cant_rate_coeff_high_speed: 0.0056  # Transition rate coeff for V >= high_speed_threshold_kmh (55 mm/s)
+  cant_rate_coeff_normal_speed: 0.008 # Transition rate coeff for V < high_speed_threshold_kmh (35 mm/s)
+  cant_gradient_transition_factor: 0.72 # Desirable cant gradient 1 in 720 factor (0.72 * Ca)
+  min_transition_length_m: 20.0       # IRPWM minimum standard transition length (m)
+  transition_round_step_m: 10.0       # IR Curve Calculation Sheet transition round-up increment (m)
+  min_bounded_transition_length_m: 5.0 # Minimum feasible transition length when deflection-bounded (m)
+  vmax_speed_coeff: 0.27              # Vmax formula factor: 0.27 * sqrt(R * (Ca + Cd))
+  goods_train_speed_kmh: 65.0         # Reference goods train speed for cant excess evaluation (km/h)
+  merge_continuous_curves: true       # Cluster contiguous arc chord bends into true design PIs
+  max_curve_cluster_gap_m: 350.0      # Maximum station distance between consecutive bends in same curve cluster
+  straight_tangent_min_segments: 4    # Consecutive collinear stations required to anchor design tangent
+  straight_tangent_angle_tol_deg: 0.02 # Maximum bearing variation (deg) per station to qualify as straight tangent
+  radius_round_interval_m: 25.0       # Standard rounding interval for estimated curve radius (m)
+  min_fitted_radius_m: 50.0           # Minimum algebraic circle fit radius accepted (m)
+  max_fitted_radius_m: 50000.0        # Maximum algebraic circle fit radius accepted (m)
+  single_bend_circle_window_m: 80.0   # Chainage half-window around single-bend PI for circle fit (m)
+  tangent_search_max_steps: 250       # Max station steps walked to locate a straight tangent run
+  tangent_fallback_window_steps: 10   # Fallback station window when no straight run meets tolerance
+  default_radius_m: 1000.0            # Fallback radius when no survey curvature can be fitted
+  min_fallback_radius_m: 175.0        # IRSOD BG absolute floor radius (m) when auto-fitting tight tangents
+  fallback_tangent_headroom_ratio: 0.90  # Max fraction of leg length consumed by auto-fallback tangent
+
+tangent_point_standards:
+  entry_tangent_to_transition_label: "TPTC-1"   # TS: Tangent to Transition Curve (Entry)
+  entry_transition_to_circular_label: "TPCC-1"  # SC: Transition to Circular Curve (Entry)
+  exit_circular_to_transition_label: "TPCC-2"   # CS: Circular Curve to Transition (Exit)
+  exit_transition_to_tangent_label: "TPTC-2"    # ST: Transition to Tangent (Exit)
+  chainage_precision: 3                          # Decimal places for tangent-point chainage
+  tick_length_m: 8.0                             # Perpendicular tick length at tangent points
+  marker_radius_m: 1.2                           # Centerline marker radius (m)
+  label_offset_m: 6.5                            # Outward label standoff from tick tip (m)
+
+dtm_settings:
+  storage_dir: "storage/dtm"
+  db_path: "storage/dtm/dtm_registry.sqlite"
+  default_s3_bucket: "esp-railway-dtm-bucket"
+  default_s3_region: "ap-south-1"
+  presigned_url_expiration_seconds: 1800
+  datum_margin_m: 5.0
+  datum_round_m: 10.0
+  max_sampling_points: 50000
+
+topo_overlay:
+  max_upload_mib: 100
+  max_kml_mib: 100
+  max_features: 250000
+  simplify_tolerance_m: 0.5
+  max_vertices_per_feature: 5000
+  max_named_layers: 80
+  default_line_color: "#38bdf8"
+  default_point_color: "#22c55e"
+  default_polygon_color: "#f59e0b"
+  default_opacity: 0.9
+  point_min_zoom: 13
+  label_min_zoom: 17

@@ -8,3 +8,5 @@ venv/
 .venv/
 storage/dtm/*.tif
 storage/dtm/*.sqlite
+greenfield/outputs/
+greenfield/logs/

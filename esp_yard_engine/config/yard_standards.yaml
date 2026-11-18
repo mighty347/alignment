@@ -1,0 +1,145 @@
+# Indian Railways RDSO / IRSOD (BG) Engineering Yard Standards Configuration
+# Reference: IRSOD (BG) Revised 2022, IRPWM 2020, RDSO GE:G-1
+
+gauge:
+  name: "Broad Gauge (BG)"
+  nominal_width_mm: 1676.0
+  dynamic_gauge_mm: 1750.0  # Gauge + rail head for dynamic clearance
+
+track_centers:
+  # Minimum distance between track centerlines in yards (IRSOD BG 2022 Chapter II)
+  min_track_center_m: 5.30
+  existing_work_min_m: 4.725
+  island_platform_min_m: 8.40
+  island_platform_standard_m: 10.50
+  # Minimum clearance between centers of converging tracks at Fouling Mark (FM)
+  fouling_mark_clearance_m: 4.265
+
+clear_standing_room:
+  # Standard Clear Standing Room (CSR) between fouling marks / starters
+  standard_goods_m: 715.0      # Accommodates standard 58-BOXN/BCNA freight train
+  standard_passenger_m: 686.0  # 24-coach passenger rake with 2 locomotives
+  min_allowed_m: 650.0
+
+turnouts:
+  # Standard RDSO turnouts on PSC sleepers (IRSOD / RDSO standard plans)
+  "1_in_8_5":
+    name: "1 in 8.5 Curved Switch"
+    ratio: 8.5
+    crossing_angle_deg: 6.70984   # 6 deg 42 min 35.4 sec
+    crossing_angle_rad: 0.117109
+    switch_lead_length_m: 28.625  # Theoretical Toe to Nose of Crossing
+    overall_length_m: 32.000
+    divergence_radius_m: 218.0
+    max_diverging_speed_kmh: 15.0
+    typical_usage: "Goods lines, loop entry, sidings"
+
+  "1_in_12":
+    name: "1 in 12 Curved Switch"
+    ratio: 12.0
+    crossing_angle_deg: 4.76364   # 4 deg 45 min 49.1 sec
+    crossing_angle_rad: 0.083141
+    switch_lead_length_m: 39.900  # Theoretical Toe to Nose of Crossing
+    overall_length_m: 44.500
+    divergence_radius_m: 441.0
+    max_diverging_speed_kmh: 30.0
+    typical_usage: "Main line to passenger loop, high-speed crossovers"
+
+  "1_in_16":
+    name: "1 in 16 Thick Web Switch"
+    ratio: 16.0
+    crossing_angle_deg: 3.57633   # 3 deg 34 min 34.8 sec
+    crossing_angle_rad: 0.062419
+    switch_lead_length_m: 52.000
+    overall_length_m: 58.000
+    divergence_radius_m: 785.0
+    max_diverging_speed_kmh: 50.0
+    typical_usage: "High speed passenger yard crossovers"
+
+platforms:
+  # Passenger platform dimensions & clearances (IRSOD BG 2022 Chapter II)
+  high_level:
+    edge_offset_m: 1.670        # Exact clearance from nearest rail centerline to coping edge
+    height_above_rail_m: 0.840  # 760mm to 840mm above rail level
+    standard_length_m: 600.0    # 24-coach train length
+    medium_length_m: 450.0      # 18-coach train length
+    short_length_m: 300.0       # 12-coach train length
+    standard_width_m: 7.00      # Main home platform standard width
+    min_width_m: 6.00
+    ramp_slope_ratio: 30.0      # 1 in 30 slope at both platform ends (Ref: IRSOD BG 2022)
+    ramp_length_m: 6.0         # Longitudinal ramp distance (m) along the track
+  island:
+    edge_offset_m: 1.670
+    height_above_rail_m: 0.840
+    standard_width_m: 10.00
+    min_width_m: 7.00
+    ramp_slope_ratio: 30.0
+    ramp_length_m: 6.0
+
+safety_structures:
+  sand_hump:
+    length_m: 120.0
+    width_m: 3.50
+    buffer_stop_width_m: 3.0
+    upward_gradient_ratio: 100.0  # 1 in 100 rising gradient
+  trap_switch:
+    lead_m: 15.0
+
+civil_structures:
+  station_building:
+    default_length_m: 35.0
+    default_width_m: 12.0
+    clearance_from_platform_edge_m: 4.5
+  foot_over_bridge:
+    standard_width_m: 3.66
+    min_width_m: 2.44
+    stair_length_m: 12.0
+    stair_width_m: 2.44
+
+yard_gradients:
+  # Vertical gradient restrictions inside station yard limits
+  max_yard_gradient_ratio: 400.0      # 1 in 400 (0.25%) max permitted
+  desirable_gradient_ratio: 1000.0    # 1 in 1000 (0.10%) desirable
+  ideal_gradient: "LEVEL"             # Flat
+
+cad_layers:
+  TRACK_MAIN:
+    name: "ESP_YARD_TRACK_MAIN"
+    color_aci: 1       # Red (Main track)
+    lineweight_mm: 0.35
+    linetype: "Continuous"
+  TRACK_LOOP:
+    name: "ESP_YARD_TRACK_LOOP"
+    color_aci: 1       # Red (Loop line per user requirement)
+    lineweight_mm: 0.25
+    linetype: "Continuous"
+  TURNOUT:
+    name: "ESP_YARD_TURNOUT"
+    color_aci: 1       # Red (Crossover / Turnouts per user requirement)
+    lineweight_mm: 0.25
+    linetype: "Continuous"
+  PLATFORM:
+    name: "ESP_YARD_PLATFORM"
+    color_aci: 7       # White (Platforms per user requirement)
+    lineweight_mm: 0.20
+    linetype: "Continuous"
+  STRUCTURES:
+    name: "ESP_YARD_STRUCTURE"
+    color_aci: 7       # White (Station Building & FOB per user requirement)
+    lineweight_mm: 0.20
+    linetype: "Continuous"
+  DIMENSIONS:
+    name: "ESP_YARD_DIMENSION"
+    color_aci: 4       # Cyan
+    lineweight_mm: 0.15
+    linetype: "Continuous"
+  TEXT:
+    name: "ESP_YARD_TEXT"
+    color_aci: 3       # Green
+    lineweight_mm: 0.20
+    linetype: "Continuous"
+  FOULING_MARK:
+    name: "ESP_YARD_FOULING_MARK"
+    color_aci: 1       # Red
+    lineweight_mm: 0.30
+    linetype: "Continuous"

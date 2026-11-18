@@ -1,6 +1,8 @@
 """
 Module: alignment/main.py
-Purpose: Standalone FastAPI Microservice for Railway Alignment Studio & Fast DTM Elevation Query.
+Purpose: Unified FastAPI Microservice for Railway Alignment Studio, Fast DTM
+         Elevation Query, Survey Centerline Extraction, and DB-Driven Greenfield
+         Composite Plan & L-Section Generation.
 Standards: RDSO / Indian Railways BG
 Port: 8001 (configurable via PORT environment variable)
 """
@@ -17,15 +19,24 @@ if str(_ROOT) not in sys.path:
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from utils.logger import get_logger
 from alignment_router import router as alignment_router
+from greenfield.greenfield_router import (
+    OUTPUTS_DIR as GREENFIELD_OUTPUTS_DIR,
+    router as greenfield_router,
+)
 
 logger = get_logger("AlignmentService")
 
 app = FastAPI(
-    title="Railway Alignment & DTM Query Service",
-    description="Standalone Microservice for Horizontal Alignment Detection, Real-Time DTM Elevation Queries, and Survey Centerline Extraction.",
+    title="Railway Alignment, DTM & Greenfield Plan/Profile Service",
+    description=(
+        "Unified Microservice for Horizontal Alignment Detection, Real-Time DTM "
+        "Elevation Queries, Survey Centerline Extraction, and DB-Driven Greenfield "
+        "Composite Plan & L-Section Generation."
+    ),
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -51,21 +62,27 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-# Register Alignment & DTM Routes
+# Mount Greenfield generated outputs (DXF/PDF downloads)
+GREENFIELD_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/outputs", StaticFiles(directory=GREENFIELD_OUTPUTS_DIR), name="outputs")
+
+# Register Alignment, DTM & Greenfield Composite Routes
 app.include_router(alignment_router)
+app.include_router(greenfield_router)
 
 
 @app.on_event("startup")
 async def startup_event() -> None:
-    logger.info("=== Railway Alignment & DTM Service Started (Port %s) ===", os.environ.get("PORT", "8001"))
-    logger.info("Total registered endpoints: %d", len(app.routes))
+    logger.info("=== Railway Alignment & Greenfield Service Started (Port %s) ===", os.environ.get("PORT", "8001"))
+    logger.info("Greenfield outputs directory: %s", GREENFIELD_OUTPUTS_DIR)
+    logger.info("Total registered routes: %d", len(app.routes))
 
 
 @app.get("/")
 def root():
     return {
         "status": "ONLINE",
-        "service": "Railway Alignment & DTM Service",
+        "service": "Railway Alignment, DTM & Greenfield Composite Service",
         "version": "1.0.0",
         "endpoints": [
             "POST /api/v1/alignment-studio/detect",
@@ -74,6 +91,10 @@ def root():
             "POST /api/v1/alignment-studio/dtm/query",
             "POST /api/v1/alignment-studio/survey/generate-centerline",
             "POST /api/v1/alignment-studio/survey/generate-centerline-path",
+            "GET  /api/v1/greenfield/composite/preview/{version_id}",
+            "POST /api/v1/greenfield/composite/generate",
+            "GET  /api/v1/greenfield/composite/jobs/{job_id}",
+            "GET  /api/v1/greenfield/composite/jobs/{job_id}/stream",
         ],
         "docs": "/docs",
     }
@@ -88,4 +109,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8001"))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
-

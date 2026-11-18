@@ -1,0 +1,972 @@
+# ==============================================================================
+# Alignment Plan & L-Section Plan Generator — Project Configuration
+# Standards: RDSO / Indian Railways BG (Broad Gauge)
+# All physical engineering parameters live here — no hardcoding in code.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Project Metadata
+# ------------------------------------------------------------------------------
+project:
+  name: "Railway Alignment Plan & L-Section Plan Generator"
+  version: "1.0.0"
+  author: "Railway Design Team"
+  description: "Automatic Railway Alignment Plan & L-Section Plan Generator"
+  pink_book_no: ""                    # Pink Book No (e.g. "PB/2023-24/104" or leave empty for ":-")
+  item_no: ""                         # Item No (e.g. "12" or leave empty for ":-")
+  project_id: ""                      # Project ID (e.g. "PRJ-NR-2024-001" or leave empty for ":-")
+
+# ------------------------------------------------------------------------------
+# Input / Output Paths (relative to plan_profile_generator/ root)
+# ------------------------------------------------------------------------------
+paths:
+  export_csv: false                                  # false -> skip CSV table exports; true -> export CSV schedules
+  kml_path: "D:/ESP-Backup/inputs/kanti_egra_updated.kmz"                 # Input railway alignment KML/KMZ path
+  dem_path: "C:/Users/Parshant/Downloads/Kanthi_DTM_0.5M.tif" # Input GeoTIFF DEM
+  data_dir: "data"
+  outputs_dir: "outputs"                             # L-Section, earthwork, profile outputs
+  alignment_plan_outputs_dir: "outputs/alignment_plan"  # Alignment Plan DXF/PDF — separate folder
+  logs_dir: "logs"
+  lsection_excel_path: "D:/ESP-Backup/inputs/kanti_lsection_data.xlsx"
+  gradient_excel_path: "D:/ESP-Backup/inputs/Graidient_excel.xlsx"
+  bridge_list_path: "D:/ESP-Backup/inputs/Bridge_List_OP2.xlsx"   # External bridge list schedule path (Excel/CSV)
+  curve_excel_path: "D:/ESP-Backup/inputs/Prop_Curve_List.xlsx"                              # Path to Proposed Curve Schedule Excel (Prop.Curve List)
+  row_excel_path: "D:/ESP-Backup/inputs/Row_Excel.xlsx"                                      # Path to Land Acquisition / ROW Excel (Row_Excel.xlsx)
+  station_excel_path: "D:/ESP-Backup/inputs/Station_Excel.xlsx"                              # Path to Railway Station Schedule Excel
+  topomap_kml_path: "D:/ESP-Backup/inputs/kanti_egra.kml"
+  topomap_shp_dir: "C:/KanthiVada/Kanthi/Kanthi_Topomap_SHP"   # Path to folder containing Topo Shapefiles (.shp)
+  # Selected Shapefiles to display (leave empty [] to show all .shp files in the folder)
+  # Example: ["Road.shp", "River.shp", "Building.shp", "Drain.shp", "Boundary.shp"]
+  selected_shp_files:
+    - STATION-BUILDING
+    - PUCCA-BUILDING
+    - DRAIN
+    - KACHHA-BUILDING
+    - UTILITY-LT
+    - UTILITY-HT
+    - CC-ROAD
+    - CULVERT
+    # - UTILITY-EP
+
+  # Shapefile layers to display text annotations for in Plan View
+  # Example: ["STATION-BUILDING", "LEVEL-CROSSING", "FOOT-OVER-BRIDGE", "CULVERT"]
+  selected_shp_text_layers:
+    - STATION-BUILDING
+
+    # - CC-ROAD
+
+# ------------------------------------------------------------------------------
+# Amazon S3 / Cloud Storage Settings
+# Enables downloading project ZIP packages and uploading generated drawings
+# ------------------------------------------------------------------------------
+s3:
+  enabled: true                       # true -> support S3 integration
+  region_name: "ap-south-1"           # AWS Region (e.g. ap-south-1 for Mumbai)
+  default_bucket: ""                  # Default S3 bucket
+  download_timeout_s: 300             # Max seconds allowed for streaming S3 ZIP download
+  upload_outputs_to_s3: false         # true -> upload generated DXF/PDF to S3 destination bucket
+
+# ------------------------------------------------------------------------------
+# Google Maps API Infrastructure Feature Detection
+# Detects Bridges, Rivers, Roads, Highways, and Crossings along alignment
+# ------------------------------------------------------------------------------
+google_maps:
+  enabled: false                      # Disabled for now per user request
+  api_key: ""                         # Set via environment or local override (never commit keys)
+  sample_interval_m: 100              # meters — distance between feature detection query points
+  search_radius_m: 50                 # meters — search radius around each station to search for features
+  cache_file: "outputs/google_maps_cache.json" # Local cache file to minimize API costs
+
+# ------------------------------------------------------------------------------
+# OSM PostGIS Database (esp_db — loaded via osm2pgsql)
+# Used by OSMPostGISDetector to detect infrastructure crossings along alignment.
+# Tables: planet_osm_line (rivers, roads, bridges), planet_osm_point (level crossings)
+# Geometry CRS: EPSG:3857 (Web Mercator — osm2pgsql default)
+# ------------------------------------------------------------------------------
+osm_postgis:
+  enabled: true                       # true → use PostGIS DB for structure detection
+  host: "localhost"                   # PostgreSQL server host
+  dbname: "esp_db"                    # Database name
+  user: "postgres"                    # PostgreSQL user
+  password: "postgres"                # PostgreSQL password
+  port: 5432                          # PostgreSQL port
+  buffer_m: 30.0                      # meters — corridor buffer around alignment for spatial query
+                                      # 30m catches all features crossing within one track width
+
+# ------------------------------------------------------------------------------
+# PostgreSQL / PostGIS Bridge Validation Config
+# Cross-references external Excel bridge list against PostGIS DB crossings
+# ------------------------------------------------------------------------------
+bridge_validation:
+  enabled: true                       # true -> validate Excel bridges with PostGIS esp_db
+  exact_match_threshold_m: 20.0       # meters -> distance threshold for VALIDATED status
+  max_proximity_threshold_m: 100.0    # meters -> max distance threshold for SHIFTED status
+  auto_align_chainage: true           # true -> auto-align bridge chainage to exact PostGIS crossing
+
+# ------------------------------------------------------------------------------
+# Railway Track Parameters (RDSO BG Standards)
+# Reference: RDSO GE:G-1, Indian Railways Schedule of Dimensions (SOD)
+# ------------------------------------------------------------------------------
+railway:
+  gauge: "BG"                         # BG | MG | NG — Ref: Indian Railways SOD (BG)
+  track_type: "single"                # single | double
+  design_speed: 160                   # km/h — Route Category A (Mail/Express)
+                                      # Ref: RDSO GE:G-1, Table: Route Category vs Design Speed
+  goods_speed: 65                     # km/h — Goods train speed (project-specific)
+  equil_speed: 120                    # km/h — Equilibrium reference speed (project-specific)
+  gauge_width_mm: 1676                # mm — BG standard track gauge
+                                      # Ref: Indian Railways SOD, Schedule of Dimensions (BG)
+  g_value_mm: 1750                    # mm — G = Gauge + Rail Head Width
+                                      # Used in: Ce = G*V^2 / (127*R)
+                                      # Ref: RDSO GE:G-1, Superelevation Formula
+
+# ------------------------------------------------------------------------------
+# Alignment / Chainage
+# ------------------------------------------------------------------------------
+alignment:
+  chainage_interval: 40               # meters — standard ESP interval (40m)
+  start_chainage: 0                   # meters — origin chainage
+  chainage_format: "CH-{km}+{m:03d}"  # Indian Railways format (synchronized with Plan View)
+  min_points: 2                       # Minimum KML vertices required
+  coordinate_precision: 6             # Decimal places for lat/lon
+  utm_precision: 3                    # Decimal places for UTM (mm precision)
+  reverse_alignment: false            # Set true if KML is digitized End→Start (i.e. runs East→West
+                                      # or South→North) and curves/chainage come out reversed.
+                                      # This flips the vertex order so Chainage 0 is at the correct end.
+
+# ------------------------------------------------------------------------------
+# Chainage (alias keys read by esp_drawer and other drawing modules)
+# Must stay in sync with alignment.chainage_interval above.
+# ------------------------------------------------------------------------------
+chainage:
+  interval_m: 40                      # meters — mirrors alignment.chainage_interval
+
+# ------------------------------------------------------------------------------
+# Horizontal Geometry
+# Reference: RDSO GE:G-1 — Track Geometry Standards
+#            IRS-T-23    — Track Parameters for High Speed (160 km/h)
+# ------------------------------------------------------------------------------
+horizontal:
+  min_radius: 2010                    # m — Design curve radius (project-specific @ 160 km/h)
+                                      # Note: RDSO GE:G-1 Table 1 mandates R_min=4000m @ 160km/h
+                                      #       R=2010m adopted per project design sheet;
+                                      #       actual Vmax computed dynamically per curve.
+  min_curve_radius_m: 175             # m — Absolute hard floor (30 km/h yard speed)
+                                      # Ref: RDSO GE:G-1, Table 1: Speed vs Min Radius
+  min_straight_length: 50             # m — Minimum tangent between consecutive curves
+  max_degree_of_curve: 2.0            # degrees — Max curvature (Ref: RDSO GE:G-1)
+  cant_gradient_ratio: 360            # 1:360 — Maximum cant gradient for BG
+                                      # Ref: RDSO GE:G-1, Transition Spiral (Criterion Lc)
+                                      # Lc = Ca * 360/1000 = 0.72 * Ca
+  max_cant_mm: 165                    # mm — Max permissible actual cant (project-specific)
+                                      # Note: RDSO GE:G-1 allows 185mm (passenger only);
+                                      #       165mm adopted per project design sheet (mixed traffic)
+  max_cant_mixed_mm: 75               # mm — Max cant for mixed (freight+passenger) traffic
+                                      # Ref: RDSO GE:G-1, Section: Maximum Cant (BG)
+  max_cant_deficiency_mm: 75          # mm — Max permissible cant deficiency (BG)
+                                      # Ref: RDSO GE:G-1, Section: Cant Deficiency
+  max_cant_excess_mm: 75              # mm — Max permissible cant excess (BG)
+  # transition_length_m: 70.0        # Optional override (commented out for 100% dynamic IRPWM Para 405 calculation)
+  use_desirable_transition: false     # false → factor=0.0056 (IRPWM Para 405(1) desirable physical transition standard)
+                                      # true  → factor=0.008 (IRPWM Para 405 virtual transition standard)
+  deflection_angle_threshold_deg: 1.0  # degrees — Min deflection to register as a formal curve (1.0° captures all curves)
+  simplify_tolerance_m: 0.5            # m — Precise tolerance preserving all horizontal curves
+  cad_kml_mode: true                  # true → precise CAD KML mode preserving all curve arcs
+                                      # true            → CAD/Civil 3D export; overrides to simplify_tolerance_m=0.5m
+                                      #                   and relies on compound curve merge logic instead
+  min_straight_between_curves_m: 50   # m — Minimum straight tangent between any two consecutive curves
+                                      # Ref: IRPWM Para 406 (BG). Same-direction curves with gap < this
+                                      # are merged as COMPOUND curves. Reverse curves with gap < Ls1+Ls2
+                                      # are flagged as REVERSE_VIOLATION.
+  virtual_transition_length_m: 14.6   # m — Threshold length of virtual transition per IRPWM Para 403(2) & 405(6)
+                                      # If common transition L <= this threshold, physical transition is omitted.
+
+  # Doubling Plan View Horizontal Curve Box Settings
+  # Ref: RDSO Plan View Drafting Guidelines (10-line table callout box)
+  plan_curve_box:
+    width_mm: 50.0                    # mm — standard RDSO callout box width on drawing
+    line_height_mm: 4.5               # mm — row height per parameter
+    header_height_mm: 5.5             # mm — header row height
+    proposed_color_aci: 1             # ACI 1 = Red (Proposed Line)
+    existing_color_aci: 7             # ACI 7 = White/Black (Existing Track)
+    min_box_spacing_mm: 6.0           # mm — minimum gap between adjacent boxes along modelspace
+    leader_offset_mm: 12.0            # mm — perpendicular standoff offset from track centerline
+
+# ------------------------------------------------------------------------------
+# Vertical Alignment
+# Reference: RDSO GE:G-1 — Track Geometry Standards
+#            IRPWM       — Indian Railways Permanent Way Manual
+# ------------------------------------------------------------------------------
+vertical:
+  terrain_type: "plains"              # plains | hills | dfc — Ref: RDSO GE:G-1 (Plains: 1:150, Hills: 1:100, DFC: 1:200)
+  ruling_gradient: 0.006667           # 1 in 150 (Plains) — Ref: RDSO GE:G-1 + IRPWM
+
+  max_gradient_hills: 0.01            # 1 in 100 (Hills)  — Ref: RDSO GE:G-1
+  max_gradient_dfc: 0.005             # 1 in 200 (DFC Loaded) — Ref: RDSO/DFC Norms
+  min_gradient: 0.001                 # 1 in 1000 — Recommended minimum for drainage in cuttings (Ref: IRPWM Para 409)
+                                      # NOTE: Must stay in sync with validation.min_gradient below.
+  abs_min_gradient: 0.000278          # 1 in 3600 — Absolute minimum for exceptional flat-terrain sections only
+  platform_gradient: 0.001            # 1 in 1000 (Platform line) — Ref: IRPWM
+  rate_of_change_accel: 0.04          # m/s² — rate of change for VC length
+  min_vc_length: 60                   # m — minimum vertical curve length (BG)
+  gradient_compensation_factor: 70.0  # 70/R (%) — grade comp on curves (BG: 0.04%/deg = 70/R, Ref: IRPWM Para 408)
+  vip_interval_m: 1000                # m — distance between vertical intersection points
+  vertical_curve_length_m: 100        # m — default parabolic curve length for grade changes
+  track_buildup_m: 0.762              # m — PFL→PRL: 350mm ballast + 240mm PSC sleeper + 172mm 60kg rail (BG Main Line)
+
+  # ── Minimum Rise-and-Fall Profile Optimizer Parameters ─────────────────────
+  min_tangent_length_m: 800           # m — Minimum straight grade tangent length between VIPs.
+                                      # Larger value → fewer VIPs → fewer grade changes → flatter profile.
+                                      # Reduce to 300 for hilly terrain needing more frequent grade changes.
+  rdp_simplify_tolerance_m: 5.0       # m — RDP profile simplification tolerance.
+                                      # Collapses terrain bumps < 5.0m height into a straight tangent.
+                                      # Increase to 5.0 for very smooth terrain, decrease to 1.5 for detail.
+  min_drainage_clearance_m: 1.0      # m — Default minimum PFL above EGL (0.50m embankment target).
+                                      # PFL is NEVER allowed below EGL + 0.60m. (RDSO GE:G-1)
+  grade_hold_buffer_m: 1.5            # m — 1-2m buffer above the drainage floor used as the
+                                      # grade-change trigger. Grade is only changed when PFL would
+                                      # drop below EGL + 0.60 + 1.5 = EGL + 2.1m. This absorbs
+                                      # minor terrain dips without triggering a rise/fall, producing
+                                      # a much flatter profile. Set to 1.0 (flat) or 2.0 (rolling).
+  max_excess_cut_m: 12.0              # m — Maximum allowed cut depth (EGL above PFL).
+                                      # If terrain is more than 12.0m above PFL, optimizer rejects that grade.
+                                      # Ref: RDSO GE:MS/0067 — Maximum cutting height.
+  max_excess_fill_m: 12.0             # m — Maximum allowed fill height (PFL above EGL).
+                                      # If PFL rises more than 12.0m above terrain, optimizer rejects that grade.
+                                      # Ref: RDSO GE:G-1 — Embankment height limits.
+
+  # ── Bridge Formation Level Clearances & HFL Freeboard ───────────────────────
+  min_hfl_clearance_m: 0.6            # m — Minimum PFL clearance above HFL (PFL >= HFL + 0.60m)
+  # Reference: IRBM Para 106 (River Bridges), IRC (Road Under Bridges)
+  # NOTE: These are conservative DEM-based estimates for DPR/Feasibility Stage.
+  #       Replace with actual HFL (from Hydraulic Study) for Detailed Design.
+  bridge_clearance_river_m: 4.0       # m above DEM EGL at river/major bridge crossing
+                                      # Basis: River Bed ≈ EGL, assume 1.5m flood depth +
+                                      #        1.5m girder depth + 1.0m freeboard = 4.0m (conservative)
+                                      # Ref: IRBM Para 106 — clearance above HFL
+  bridge_clearance_canal_m: 2.5       # m above DEM EGL at canal/stream/minor bridge crossing
+                                      # Basis: Stream bed ≈ EGL + 0.5m water + 1.2m slab + 0.8m margin
+                                      # Ref: IRBM Para 106
+  bridge_clearance_culvert_m: 1.5     # m above DEM EGL at box culvert location
+                                      # Basis: Ground ≈ EGL, 0.9m box + 0.6m cover = 1.5m fill
+                                      # Ref: RDSO GE:G-0014
+  bridge_clearance_rub_nh_m: 6.1      # m above DEM EGL at RUB (NH / SH / Primary road)
+                                      # Basis: Road ≈ EGL, 5.5m IRC headroom + 0.6m RCC slab
+                                      # Ref: IRC:SP:34, Indian Railways RUB clearance norms
+  bridge_clearance_rub_local_m: 5.0   # m above DEM EGL at RUB (local / village / earthen road)
+                                      # Basis: Road ≈ EGL, 4.5m headroom + 0.5m slab
+                                      # Ref: IRC:SP:34
+  bridge_ramp_lookahead_m: 1500.0     # m — Lookahead distance to detect upcoming bridge constraints
+                                      # Optimizer begins ramping up PFL this far ahead of bridge chainage
+  bridge_chainage_unit: "km"          # "km" | "m" — unit used in Bridge List Excel chainage column
+                                      # "km" → values like 1.773 are multiplied ×1000 to get meters
+                                      # "m"  → values like 1773.0 used directly
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# Formation Design (RDSO/GE/MS/0067)
+# Single Track BG
+# ------------------------------------------------------------------------------
+formation:
+  # Formation widths (meters)
+  width_single_cut: 6.85              # m — BG single track, cutting
+  width_single_fill_low: 7.70         # m — BG single, embankment H <= 6m
+  width_single_fill_high: 8.85        # m — BG single, embankment H > 6m
+  width_double_cut: 13.00             # m — BG double track, cutting
+  width_double_fill_low: 13.70        # m — BG double, embankment H <= 6m
+  width_double_fill_high: 14.60       # m — BG double, embankment H > 6m
+  fill_height_threshold: 6.0          # m — embankment height threshold
+
+  # Side slopes (Horizontal : 1 Vertical)
+  slope_cut_soil: 1.5                 # H:1V — ordinary soil (cutting)
+  slope_cut_rock: 0.25                # H:1V — hard rock (cutting)
+  slope_fill: 2.0                     # H:1V — fill / embankment
+  slope_fill_sandy: 2.0               # H:1V — sandy soil
+
+  # Subgrade
+  blanket_thickness: 0.300            # m — blanket layer thickness (RDSO)
+  ballast_cushion: 0.200              # m — ballast under sleeper
+  rail_height: 0.172                  # m — UIC60 rail height (BG)
+  sleeper_depth: 0.200                # m — depth of sleeper
+  track_top_to_formation: 0.572       # m — total depth (ballast + sleeper + rail)
+
+# ------------------------------------------------------------------------------
+# Earthwork
+# ------------------------------------------------------------------------------
+earthwork:
+  shrinkage_factor: 0.10              # 10% — soil shrinkage (ordinary soil)
+  swell_factor: 0.25                  # 25% — rock swell
+  free_haul_distance: 1000            # m — free haul limit
+  lead_distance_step: 500             # m — lead slab interval
+  # Formation widths & slopes (read by earthwork.py, sourced from formation section)
+  formation_width_cut_m: 6.85         # m — BG single track, cutting (RDSO)
+  formation_width_fill_m: 7.70        # m — BG single track, embankment H ≤ 6m (RDSO)
+  side_slope_cut: 1.5                 # H:1V — ordinary soil cutting (RDSO)
+  side_slope_fill: 2.0                # H:1V — fill / embankment (RDSO)
+
+# ------------------------------------------------------------------------------
+# Railway Boundary (Right-Of-Way & Land Plan Parameters)
+# Dynamically calculates Toe Distance & Desired Land based on PFL-OGL height
+# ------------------------------------------------------------------------------
+railway_boundary:
+  enabled: false                      # Disabled for now per user request
+  use_row_excel: false                # false -> do not show excel row boundary
+  use_kml_boundary: false             # false -> do not use KML boundary
+  base_bridge_width_m: 7.85           # m — Structure / formation top width at bridge (half-width = 3.926m)
+  cutting_bottom_width_m: 9.50        # m — Cutting bottom width with side drains (half-width = 4.75m)
+  fill_slope_ratio: 2.0               # 1:2 slope in FILL (H:1V)
+  cut_slope_ratio: 1.0                # 1:1 slope in CUT (H:1V)
+  cutting_drain_width_m: 1.5          # m — 1.5m catchwater / surface drainage boundary added in CUT before safety buffer
+  berm_slope_ratio: 2.0               # 1:2 slope applied on remaining height above 6m in FILL
+  cut_berm_slope_ratio: 1.0           # 1:1 slope applied on remaining depth above 6m in CUT
+  cut_high_extra_offset_m: 3.0        # m — 3.0m extra offset added for deep cuts (|H| >= 6m)
+  fill_height_threshold_m: 6.0        # m — Embankment height threshold (6m) where berm & high buffer activate
+  cut_height_threshold_m: 6.0         # m — Cutting depth threshold (6m) where berm & extra 3m offset activate
+  safety_buffer_low_m: 3.0            # m — 3.0m safety margin added after slope toe for H < 6m
+  safety_buffer_high_m: 6.0           # m — 6.0m safety margin added after slope toe for H >= 6m in FILL
+  safety_buffer_m: 3.0                # m — Default fallback safety margin
+  default_track_center_offset_m: 0.0  # m — Track centerline offset from reference line
+  default_boundary_offset_m: 15.0     # m — Clean straight baseline plain track ROW offset (15m)
+  min_row_interval_length_m: 100.0    # m — Do not change ROW width for segments shorter than 100m
+  approach_lead_m: 20.0               # m — Structure approach lead on both sides of bridge abutment
+  taper_ratio: 10.0                   # 1:10 linear diagonal splay transition ratio (IRWM Para 206)
+  min_taper_length_m: 20.0            # m — Minimum diagonal transition length
+
+# ------------------------------------------------------------------------------
+# ESP Drawing Parameters
+# Reference: IR Drg Standards, ezdxf
+# ------------------------------------------------------------------------------
+drawing:
+  chainage_format: "CH-{km}+{m:03d}"  # Unified chainage format for Plan and Profile (L-Section) views
+  # Scales per RDSO / Indian Railways Standards
+  plan_scale: 5000                    # 1:5,000 horizontal plan scale
+  profile_h_scale: 5000.0             # 1:5,000 horizontal profile scale
+  profile_v_scale: 500.0              # 1:500 vertical profile scale
+  max_lsection_length_m: 5000.0       # 5,000 m (5 km per sheet). Set to 0 to only generate complete drawing
+  generate_complete_profile: false    # false → skip full-length single-file drawing; only generate 5 km sheets
+  generate_sheet_drawings: true       # Generate standard 5 km part drawing sheets (sheet1, sheet2, etc.)
+  export_pdf: true                    # true → export vector PDF for each sheet alongside DXF
+  pdf_dpi: 150                        # DPI for vector PDF plot rendering
+  font_name: "arial.ttf"              # Exact font matching alignment_plan_sheet1_km0.0-5.0.dxf
+  font_width_factor: 1.0              # Text aspect ratio width factor (1.0 = standard width)
+  curve_box_as_block: true            # Render curve details boxes as AutoCAD BLOCK references (INSERT)
+  curve_tp_symbol_style: "dumbbell"   # "dumbbell" | "pin" | "circle" | "none"
+  curve_tp_symbol_radius_mm: 0.2      # mm — Radius of dumbbell outer circles
+  curve_tp_symbol_inner_radius_mm: 0.2 # mm — Radius of dumbbell inner circles (on track)
+  curve_tp_symbol_stem_len_mm: 1.5    # mm — Outer stem length for 3rd line / UP line
+  curve_tp_symbol_back_len_mm: 0.0    # mm — Inner stem length for 3rd line / UP line
+  curve_tp_symbol_stem_len_2_mm: 1.5  # mm — Outer stem length for 4th line / DN line
+  curve_tp_symbol_back_len_2_mm: 0.0  # mm — Inner stem length for 4th line / DN line
+  curve_tp_symbol_lineweight: 18      # Lineweight (0.18 mm)
+  show_plan_bridges: true             # Render dual-color slanted bridge callouts in Plan View
+  plan_bridge_callout_format: "3line_shelf" # 3-line format with underline shelf
+  plan_bridge_callout_slant_deg: 60.0 # 60-degree standard slant
+  plan_bridge_line_spacing_mm: 3.37   # Pitch matching 2.497mm text height
+  plan_bridge_color: 6                # ACI 6 (Magenta) fallback
+  plan_bridge_lineweight: 25
+  plan_bridge_symbol_style: "culvert_wings" # Dual-color splayed wing-wall culvert symbol (White existing + Red proposed)
+  plan_bridge_symbol_width_mm: 2.0    # mm — Barrel opening width between parallel abutments
+  plan_bridge_wing_len_mm: 2.0        # mm — Splayed wing wall length
+  plan_bridge_junction_tick_len_mm: 0.8 # mm — Intermediate return length at existing/proposed junction
+  plan_bridge_wing_angle_deg: 45.0    # Degrees — Splay angle of wing walls
+  plan_bridge_formation_clearance_mm: 2.5 # mm — Extension beyond outer track centerlines
+
+  # Sheet & Sidebar Dimensions & Styling
+  sheet_height_mm: 915.0              # 915 mm sheet height (gives exactly 4575.0 m modelspace bounds with 5.0 scale)
+  margin_mid_mm: 55.0                 # mm — vertical clearance gap between L-Section Profile and Plan View (prevents leader overlap)
+  sidebar_width_mm: 153.0             # 153 mm standard right sidebar panel width
+  sidebar_color: "BLACK"                # Options: "RED", "BLACK", "WHITE", "BLUE", "GREEN", "YELLOW", "CYAN", "MAGENTA"
+  sidebar_lineweight: 35              # Lineweight (35 = 0.35mm, 50 = 0.50mm, 25 = 0.25mm)
+
+  # Right Sidebar Content & Dynamic Notes Configuration
+  sidebar_notes:
+    enabled: true
+    origin_station: "KANTI"           # Origin station name (auto-fallback if not detected in shapefile)
+    origin_chainage_m: 0.0            # Origin station building chainage (meters)
+    ir_code_correction_date: "27.04.2022"  # IR Engg Code correction date
+    ruling_gradient_display: ""       # Custom override (e.g. "1 IN 205") or leave empty to auto-derive from vertical.ruling_gradient
+    vc_threshold_text: "4MM PER METER OR 0.4PERCENT"  # Vertical curve threshold specification
+    text_height_mm: 2.6               # Text height for notes in paper mm
+    line_spacing_mm: 4.2              # Line spacing for notes in paper mm
+
+  # Modelspace Post-Scaling Options (AutoCAD SCALE equivalent at base point 0,0)
+  auto_scale_to_ground_meters: true  # true -> 1 CAD unit = 1.0 ground metre (40 CAD units between 40m chainage ticks)
+  modelspace_scale_factor: 5.0       # 5.0 = (h_scale 5000 / 1000) scale factor
+
+  # Elevation Profile (Longitudinal Section) vertical range
+  profile_max_height_m: 35          # m — maximum elevation shown ABOVE datum on Y-axis
+                                      # At V=1:500: 15m × (1000/500) = 30mm paper height
+                                      # Increase if terrain has more than 15m of relief above datum
+  profile_area_h_mm: 40.0             # mm — total paper height allocated to the profile box
+                                      # = (profile_max_height_m / v_scale × 1000) + 10mm margin
+                                      # Default 40mm = 30mm data + 10mm padding
+
+  # Alignment Plan View Configuration
+  plan_view:
+    enabled: true
+    scale: 5000                       # 1:5,000 plan scale (matches profile_h_scale)
+    plan_area_height_mm: 460.0         # 460 mm height for 2D Plan View box
+                                       # Budget: data_band=180mm + profile=120mm + plan=460mm + margins=70mm = 830mm ≤ A0 841mm
+                                       # → 230mm per side of track centreline for bridge/curve callouts
+    chainage_tick_interval_m: 100      # 100m ticks along alignment in plan view
+    chainage_format: "CH-{km}+{m:03d}"  # Format pattern for Plan View station labels
+                                        # Presets: 'CH-{km}+{m:03d}' (e.g. CH-1+200),
+                                        #          '{km}+{m:03d}'    (e.g. 1+200),
+                                        #          'Km {km}+{m:03d}' (e.g. Km 1+200),
+                                        #          'KM {km}+{m:03d}' (e.g. KM 1+200),
+                                        #          '{ch:.0f}m'       (e.g. 1200m)
+    show_chainage_labels: true         # true -> render chainage text labels beside ticks in Plan View
+    show_alignment_centerline: true    # true -> render official red track centerline (tangents, spirals, true arcs)
+    show_topo_layer: true              # render topographic survey layers (roads, rivers, boundaries, buildings)
+    max_topo_offset_m: 5000.0          # max lateral distance left & right of track (for external topo maps)
+                                       # NOTE: in kml_only_mode this filter is DISABLED; all KML features are drawn
+    min_topo_boundary_length_m: 1.0    # 1m minimum boundary length (for external topo maps only)
+    only_outer_boundary: false         # false -> render all topo layers (roads, rivers, buildings, boundaries)
+    show_north_arrow: true             # render North Arrow symbol
+    kml_only_mode: false               # false -> render full mathematical alignment with true CAD arcs & annotations
+    reconstruct_curves: false           # true -> reconstruct curves with true circular arcs and tangents
+
+    structure_callout:
+      style: "slanted_leader_underline" # Indian Railways standard slanted leader with shelf underline
+      text_height_mm: 3.2              # Paper height for callout text (mm)
+      color_proposed: 1                # DXF ACI Color 1 (Red) for Proposed structures
+      color_existing: 7                # DXF ACI Color 7 (Black) for Existing structures
+      slant_angle_deg: 30.0            # Slant angle relative to track heading
+      lineweight_shelf: 25             # Lineweight for shelf underline line
+
+  # Callout Collision Avoidance Configuration (2D Multi-Directional Shifting)
+  collision_avoidance:
+    enabled: true
+    box_margin_mm: 1.5                # mm — margin added to text AABB bounding boxes
+    shift_x_step_mm: 12.0             # mm — horizontal X-shift step size
+    tier_step_mm: 14.0                # mm — vertical Y-tier shift step size
+    max_tiers: 4                      # maximum vertical tiers to attempt
+    slant_angles_deg: [60.0, 120.0]   # candidate leader slant angles (right / left)
+
+  # Standard ISO Sheet Dimensions
+  sheet_width_mm: 1189.0              # ISO A0 width
+  sheet_height_mm: 841.              # ISO A0 height
+  margin_mm: 10.0
+
+  # Text heights (paper mm)
+  text_height_title_mm: 7.0
+  text_height_heading_mm: 5.0
+  text_height_label_mm: 3.5
+  text_height_data_mm: 2.5
+  text_height_tick_mm: 2.0
+
+  # Output formats
+  export_dxf: true
+  export_pdf: true
+  export_png: false
+  export_png_dpi: 300
+
+# ------------------------------------------------------------------------------
+# Railway Boundary (ROW) Configuration
+# ------------------------------------------------------------------------------
+railway_boundary:
+  enabled: true
+  use_kml_boundary: true
+  show_offset_change_labels: true
+  callout_side: "SINGLE"               # "SINGLE" (one callout per station) | "RHS" | "LHS" | "BOTH"
+  min_offset_change_threshold_m: 1.0   # Minimum change in offset from centerline to show callout (m)
+  max_step_span_m: 15.0                # Max along-track span for transition steps/tapers (m)
+  text_height_mm: 2.5                  # Text height for boundary transition labels (mm)
+  layer_text: "RAILWAY_BOUNDARY_TEXT"
+  layer_line: "RAILWAY_BOUNDARY"
+  color: 1                             # Red color index (AutoCAD Color Index 1)
+  min_row_interval_length_m: 50.0
+
+# ------------------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------------------
+logging:
+  level: "INFO"                       # DEBUG | INFO | WARNING | ERROR
+  log_to_file: true
+  log_filename: "esp_generator.log"
+  max_bytes: 10485760                 # 10 MB
+  backup_count: 5
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  datefmt: "%Y-%m-%d %H:%M:%S"
+
+# ------------------------------------------------------------------------------
+# Station Centerline Callout & Marker Flag (Plan View)
+# Demarcates Centerline of Station (C/L of Station) per Indian Railways practice
+# ------------------------------------------------------------------------------
+station_marker:
+  enabled: true                       # true -> plot station centerline flags on Plan View
+  layer: "STATION_MARKER"             # AutoCAD DXF layer for pole line and flag symbol
+  color: 3                            # AutoCAD Color Index (ACI 3 = Green)
+  lineweight: 45                      # 0.25 mm lineweight
+  linetype: "CENTER"                  # Dash-dot centerline linetype
+  text_layer: "STATION_TEXT"          # Layer for station callout text
+  text_color: 3                       # AutoCAD Color Index (ACI 3 = Green)
+  text_height_m: 2.5                  # meters — base text height
+  pole_length_m: 75.0                 # meters — flagpole length outside track
+  stem_back_extend_m: 25.0            # meters — extension across track on opposite side
+  box_offset_m: 30.0                  # meters — distance from track centerline to box center
+  box_padding_m: 2.0                  # meters — padding around text inside box
+  flag_width_m: 25.0                  # meters — waving flag horizontal width
+  flag_height_m: 30.0                 # meters — waving flag vertical height along pole
+  placement_side: "RHS"               # RHS | LHS — placement side looking in direction of chainage
+
+# ------------------------------------------------------------------------------
+validation:
+  # ── Vertical Alignment limits ───────────────────────────────────────────────
+  max_gradient_plains: 0.006667       # 1 in 150 (0.667%) — Ruling gradient, plains (Ref: IRPWM Para 408)
+  max_gradient_hills: 0.01            # 1 in 100 (1.00%) — Steepest gradient, hill section (Ref: IRPWM Para 408)
+  max_gradient_dfc: 0.005             # 1 in 200 (0.50%) — DFC ruling gradient (Ref: DFCCIL Manual)
+  min_gradient: 0.001                 # 1 in 1000 (0.10%) — Recommended minimum for drainage in cuttings (Ref: IRPWM Para 409)
+  max_platform_gradient: 0.0025       # 1 in 400 (0.25%) — Station/yard limits ruling gradient (Ref: IRSOD BG / IRPWM)
+  grade_compensation_factor: 70.0     # 70/R (%) — BG grade comp (0.04%/deg = 70/R, Ref: IRPWM Para 408)
+  min_formation_clearance_m: 0.50     # m — Min FL above EGL in fill sections (Ref: RDSO GE:G-0014)
+  max_cut_height_standard_m: 6.0      # m — Max cut depth for standard 1.5:1 slopes (Ref: RDSO GE:G-0014)
+  max_fill_height_standard_m: 6.0     # m — Max fill for standard 2:1 slopes (Ref: RDSO GE:G-0014)
+  track_buildup_m: 0.762              # m — PFL → PRL (350mm ballast + 200mm sleeper + 172mm rail + 40mm pad/liner = 762mm, BG PSC)
+
+  # ── Vertical Curve limits (IRPWM Para 409) ───────────────────────────────────
+  min_vc_length_m: 60                 # m — Absolute minimum VC length, BG (Ref: IRPWM Para 409)
+  min_grade_change_for_vc: 0.004      # 0.4% (4mm/m) — Grade change threshold requiring a VC (Ref: IRPWM Para 409)
+  min_rv_summit_m: 4000               # m — Minimum radius of vertical curve (Summit) @ 160km/h (Ref: IRPWM Para 409)
+  min_rv_sag_m: 3000                  # m — Minimum radius of vertical curve (Sag) @ 160km/h (Ref: IRPWM Para 409)
+  vc_rate_of_change: 4000             # divisor in Lv formula (Ref: IRPWM Para 409)
+
+  # ── Horizontal Curve limits (IRPWM Para 401–406 & IRSOD Schedule I) ──────────
+  min_radius_160: 4000                # m — Minimum radius @ 160 km/h (Ref: IRPWM)
+  min_radius_130: 2000                # m — Minimum radius @ 130 km/h (Ref: IRPWM)
+  min_radius_100: 875                 # m — Minimum radius @ 100 km/h (Ref: IRPWM)
+  min_radius_075: 400                 # m — Minimum radius @ 75 km/h (Ref: IRPWM)
+  max_cant_passenger_mm: 165          # mm — Maximum actual cant, BG (Ref: IRSOD BG Schedule I Chapter IV Item 2)
+  max_cant_mixed_mm: 75               # mm — Maximum actual cant, freight/mixed service (Ref: IRPWM)
+  max_cant_deficiency_mm: 100         # mm — Max cant deficiency, BG Rajdhani/Shatabdi routes (Ref: IRSOD BG)
+  max_cant_deficiency_std_mm: 75      # mm — Max cant deficiency, BG standard passenger routes (Ref: IRSOD BG)
+  spiral_factor_desirable: 0.008      # IRPWM Para 405: Ls_desirable = 0.008 × Ca × V
+  spiral_factor_minimum: 0.0056       # IRPWM Para 405: Ls_minimum = 0.0056 × Ca × V
+  cant_gradient_factor: 360           # 1:360 — Cant gradient limit, BG (Ref: IRPWM Para 405)
+  min_straight_same_dir_m: 50         # m — Min straight between same-direction curves (Ref: IRPWM Para 406)
+
+  # ── Formation & Earthwork (RDSO GE:G-0014) ──────────────────────────────────
+  formation_width_cut_m: 6.85         # m — BG single track, cutting (Ref: RDSO GE:G-0014)
+  formation_width_fill_low_m: 7.70    # m — BG single, embankment H ≤ 6m (Ref: RDSO GE:G-0014)
+  formation_width_fill_high_m: 8.85   # m — BG single, embankment H > 6m (Ref: RDSO GE:G-0014)
+  fill_height_threshold_m: 6.0        # m — Threshold between low/high embankment (Ref: RDSO GE:G-0014)
+  slope_cut_ratio: 1.5                # H:V — Ordinary soil cutting slope (Ref: RDSO GE:G-0014)
+  slope_fill_ratio: 2.0               # H:V — Embankment fill slope (Ref: RDSO GE:G-0014)
+  blanket_thickness_mm: 300           # mm — Blanket / subgrade layer (Ref: RDSO GE:G-0014)
+
+  # ── Special Locations ───────────────────────────────────────────────────────
+  bridge_approach_gradient_limit: 0.0025  # 1:400 — Max gradient within 30m of bridge (Ref: IRBM Para 102)
+  bridge_approach_length_m: 30            # m — Check zone on each side of bridge (Ref: IRBM Para 102)
+  lc_gradient_limit: 0.001               # 1:1000 — Max gradient at level crossing (Ref: IRPWM)
+  lc_check_length_m: 30                  # m — Check zone on each side of level crossing (Ref: IRPWM)
+  min_straight_bridge_to_curve_m: 50     # m — Min straight between bridge end and nearest curve (Ref: IRBM Para 102)
+
+  # ── Drawing Standards ───────────────────────────────────────────────────────
+  max_sheet_length_m: 5000               # m — Max alignment per L-Section drawing sheet (Ref: Indian Railways Drawing Norms)
+  standard_chainage_interval_m: 20       # m — Standard ESP chainage interval (Ref: Indian Railways Drawing Norms)
+  required_data_bands: 10                # count — Required data bands in ESP L-Section drawing
+
+# ------------------------------------------------------------------------------
+# Station Marker & ESP Yard Configuration in Plan View
+# ------------------------------------------------------------------------------
+station_marker:
+  enabled: true
+  detailed_yard: true
+  crossover_as_spline: true    # Draw crossover / turnout curves as AutoCAD SPLINE entities
+  show_station_text_only: true # Show Station name callout text ONLY
+  show_yard_text: false        # Suppress internal yard text (track names, points, CSR, platforms, etc.)
+  show_callout_text: true      # Draw 3-line station callout box ('C/L OF <NAME> RAILWAY STATION, AT Km: <KM>')
+  placement_side: "RHS"
+  color: 3                   # Green (ACI 3)
+  text_color: 3
+  lineweight: 25
+
+# ------------------------------------------------------------------------------
+# Railway Drawing Sheet Templates (Greenfield and Brownfield)
+# Defines functional spatial viewports: Plan View, Longitudinal Section, Notes/Sidebar, Title Block
+# ------------------------------------------------------------------------------
+templates:
+  default_template: "greenfield"      # "greenfield" | "brownfield"
+
+  greenfield:
+    name: "Greenfield New Broad Gauge Line Working Plan & L-Section"
+    sheet_width_mm: 1189.0
+    sheet_height_mm: 915.0
+    margin_mm: 10.0
+    sidebar_width_mm: 153.0
+    sidebar_gap_mm: 10.0
+    label_width_mm: 80.0
+    margin_mid_mm: 55.0
+    plan_scale: 5000.0
+    profile_h_scale: 5000.0
+    profile_v_scale: 500.0
+    plan_view:
+      track_color: 1                  # Red (ACI 1) Proposed Track
+      track_lineweight: 50
+      chainage_tick_interval_m: 100.0
+      show_alignment_centerline: true
+      show_topo: true
+      show_north_arrow: true
+    longitudinal_section:
+      profile_area_height_mm: 120.0
+      num_data_bands: 10
+      band_row_height_mm: 18.0
+      datum_round_step_m: 5.0
+      datum_clearance_m: 20.0
+      station_tick_interval_m: 20.0
+      station_grid_interval_m: 100.0
+      km_interval_m: 1000.0
+      label_text_height_mm: 2.4
+      station_text_height_mm: 2.0
+      km_text_height_mm: 3.0
+      bands:
+        - title: "VERTICAL GEOMETRY"
+          lines: ["VERTICAL GEOMETRY"]
+          height_mm: 22.0
+          header_color: 1
+          value_color: 1
+          field_name: "vert_geom"
+        - title: "HORIZONTAL GEOMETRY"
+          lines: ["HORIZONTAL GEOMETRY"]
+          height_mm: 22.0
+          header_color: 4
+          value_color: 4
+          field_name: "horiz_geom"
+        - title: "CUT (-) / FILL (+)"
+          lines: ["CUT (-) / FILL (+)"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "cut_fill_m"
+          format_type: "signed"
+        - title: "DIFF PRL & ERL"
+          lines: ["DIFF PRL & ERL"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "diff_prl_erl_m"
+          format_type: "signed"
+        - title: "PROP RAIL LEVEL"
+          lines: ["PROP RAIL LEVEL"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "prl_m"
+        - title: "PROP. FORMATION LEVEL"
+          lines: ["PROP. FORMATION LEVEL"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "pfl_m"
+        - title: "EX RAIL LEVEL"
+          lines: ["EX RAIL LEVEL"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "erl_m"
+        - title: "EX. FORMATION LEVEL"
+          lines: ["EX. FORMATION LEVEL"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "efl_m"
+        - title: "GROUND LEVEL"
+          lines: ["GROUND LEVEL"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "egl_m"
+        - title: "CHAINAGE (m)"
+          lines: ["CHAINAGE (m)"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "chainage_m"
+    notes:
+      enabled: true
+      title: "GENERAL NOTES:-"
+      title_color: 1
+      notes_list:
+        - "1. ALL DIMENSIONS ARE IN METRIC UNITS (METRES / MILLIMETRES)."
+        - "2. PROPOSED TRACK IS SHOWN IN CONTINUOUS RED LINE."
+        - "3. RULING GRADIENT ADOPTED IS 1 IN 150 COMPENSATED FOR CURVES."
+        - "4. VERTICAL CURVES ARE PROVIDED WHERE GRADE CHANGE EXCEEDS 4.0 mm/m (0.4%)."
+        - "5. PROPOSED FORMATION WIDTH AND SLOPES ARE AS PER RDSO GE:G-0014."
+        - "6. DIFFERENCE BETWEEN FORMATION LEVEL AND RAIL LEVEL (TRACK BUILDUP) IS 0.762m."
+        - "7. RAILWAY LAND BOUNDARY SHOWN IS AS PER LAND ACQUISITION SURVEY."
+        - "8. STRUCTURE DETAILS AND WATERWAYS ARE AS PER APPROVED BRIDGE LIST."
+        - "9. FOR DETAILED STATION YARD LAYOUT, TURNOUTS, PLATFORMS, AND CSL, REFER TO APPROVED STATION YARD ENGINEERING SCALE PLAN (ESP)."
+    title_block:
+      enabled: true
+      railway_zone: "SOUTH CENTRAL RAILWAY"
+      division: "SECUNDERABAD DIVISION"
+      project_name: "NEW BROAD GAUGE RAILWAY LINE"
+      plan_title: "WORKING PLAN AND LONGITUDINAL SECTION"
+      cao_drawing_prefix: "CAO/C/TR/LS"
+      consultant_name: "RAILWAY DESIGN CONSULTANT"
+
+  brownfield:
+    name: "Brownfield Doubling / 3rd & 4th Line Working Plan and Section"
+    sheet_width_mm: 1189.0
+    sheet_height_mm: 915.0
+    margin_mm: 10.0
+    sidebar_width_mm: 185.0
+    sidebar_gap_mm: 10.0
+    label_width_mm: 80.0
+    margin_mid_mm: 55.0
+    plan_scale: 5000.0
+    profile_h_scale: 5000.0
+    profile_v_scale: 500.0
+    plan_view:
+      existing_track_color: 7         # White (ACI 7) Existing Line
+      existing_track_lineweight: 35
+      proposed_track_color: 1         # Red (ACI 1) Proposed Doubling Line
+      proposed_track_lineweight: 50
+      chainage_tick_interval_m: 20.0
+      major_tick_interval_m: 100.0
+      tick_length_m: 3.0
+      major_tick_length_m: 6.0
+      chainage_tick_centered: true
+      dimension_interval_m: 200.0
+      show_topo: true
+      show_north_arrow: true
+    longitudinal_section:
+      profile_area_height_mm: 120.0
+      num_data_bands: 13
+      band_row_height_mm: 18.0
+      datum_round_step_m: 5.0
+      datum_clearance_m: 20.0
+      station_tick_interval_m: 20.0
+      station_grid_interval_m: 100.0
+      km_interval_m: 1000.0
+      label_text_height_mm: 2.4
+      station_text_height_mm: 2.0
+      km_text_height_mm: 3.0
+      bands:
+        - title: "EXT.Alignment"
+          lines: ["EXT.Alignment"]
+          height_mm: 20.0
+          header_color: 7
+          value_color: 7
+          field_name: "ext_alignment"
+        - title: "PROP.Alignment"
+          lines: ["PROP.Alignment"]
+          height_mm: 20.0
+          header_color: 1
+          value_color: 1
+          field_name: "prop_alignment"
+        - title: "Gradient of Propose Line"
+          lines: ["Gradient of", "Propose Line"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "prop_gradient"
+        - title: "Gradient of Existing Track"
+          lines: ["Gradient of", "Existing Track"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "exg_gradient"
+        - title: "Diff.Between Rail levels"
+          lines: ["Diff.Between", "Rail levels"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "diff_prl_erl_m"
+          format_type: "signed"
+        - title: "Height Of (+) Bank / (-) Cutting"
+          lines: ["Height Of (+)", "Bank / (-) Cutting"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "cut_fill_m"
+          format_type: "signed"
+        - title: "Rail Level of Existing Track (M)"
+          lines: ["Rail Level of", "Existing Track (M)"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "erl_m"
+        - title: "Formation Level of Existing Track (M)"
+          lines: ["Formation Level of", "Existing Track (M)"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "efl_m"
+        - title: "proposed Rail Level"
+          lines: ["Proposed Rail Level", "of {line_designation}"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "prl_m"
+        - title: "Proposed Formation Level of"
+          lines: ["Proposed Formation", "Level of {line_designation}"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "pfl_m"
+        - title: "Ground Level(M)"
+          lines: ["Ground Level (M)"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "egl_m"
+        - title: "Chainage (Km)"
+          lines: ["Chainage (Km)"]
+          height_mm: 18.0
+          header_color: 7
+          value_color: 7
+          field_name: "chainage_m"
+        - title: "KILOMETRE"
+          lines: ["KILOMETRE"]
+          height_mm: 18.0
+          header_color: 1
+          value_color: 1
+          field_name: "km_stone"
+    notes:
+      enabled: true
+      title: "NOTE:-"
+      title_color: 1
+      notes_list:
+        - "1. PROPOSALS ARE SHOWN IN RED."
+        - "2. EXISTING TRACK IS SHOWN AS CONTINUOUS WHITE LINE."
+        - "3. DISMANTLING IS SHOWN IN DOTTED."
+        - "4. SURVEY LEVELS ARE SHOWN IN METRIC UNITS (METRES)."
+        - "5. THE RAILWAY LAND BOUNDARY INDICATED IN THIS DRAWING IS AS EXISTING ON GROUND. THE CERTIFIED LAND PLANS AVAILABLE IN HQ OR DIVISIONAL OFFICES ARE ONLY THE FINAL AUTHORITY."
+        - "6. ALL EXISTING DETAILS SHOWN ARE PERTAINING TO EXG. UP AND DN LINES, INCLUDING CURVE DETAILS."
+        - "7. THE RAIL LEVELS ARE GIVEN IN THIS DRAWING AS PER THE PHYSICAL SURVEY."
+        - "8. THE DIFFERENCE BETWEEN F.L. TO R.L. FOR PROPOSED 3RD LINE FOR 60KG RAILS ON PSC SLEEPERS WITH 350mm BALLAST CUSHION IS 0.762m."
+        - "9. RULING GRADIENT ADOPTED IS 1 IN 150 (COMPENSATED ON CURVES PER RDSO STANDARDS)."
+        - "10. VERTICAL CURVES ARE PROVIDED WHERE GRADE CHANGE EXCEEDS 4.0 mm/m (0.4%)."
+        - "11. ON ROUTES WHERE RAIL GRINDING IS IN PRACTICE, TRACK MOUNTED AUTOMATIC GAUGE FACE LUBRICATORS SHOULD BE PROVIDED ON CURVES OF RADIUS 1400 M (1.25°) AND SHARPER AS PER PARA 424(2) OF IRPWM 2020."
+        - "12. FOR DETAILED STATION YARD LAYOUT, TURNOUTS, PLATFORMS, AND CSL, REFER TO APPROVED STATION YARD ENGINEERING SCALE PLAN (ESP)."
+    title_block:
+      enabled: true
+      railway_zone: "SOUTH CENTRAL RAILWAY"
+      division: "SECUNDERABAD DIVISION"
+      project_title: "PROPOSED 3rd AND 4th LINES BETWEEN SECUNDERABAD - WADI STATIONS"
+      plan_title: "WORKING PLAN AND SECTION"
+      drawing_prefix: "CAO/C/TR/LS / SC-WADI"
+      drawing_year: "2026"
+      consultant_name: "FLS DESIGN CONSULTANT"
+    lines:
+      "2nd_line":
+        designation: "2nd Line"
+        full_title: "PROPOSED 2ND LINE (TRACK DOUBLING)"
+        project_title: "PROPOSED 2ND LINE (TRACK DOUBLING) BETWEEN SECUNDERABAD - WADI STATIONS"
+        track_spacing_m: 5.30
+        note_6: "6. ALL EXISTING DETAILS SHOWN ARE PERTAINING TO EXG. DN LINE, INCLUDING CURVE DETAILS."
+        note_8: "8. THE DIFFERENCE BETWEEN F.L. TO R.L. FOR PROPOSED 2ND LINE FOR 60KG RAILS ON PSC SLEEPERS WITH 350mm BALLAST CUSHION IS 0.762m."
+      "3rd_line":
+        designation: "3rd Line"
+        full_title: "PROPOSED 3RD LINE"
+        project_title: "PROPOSED 3RD LINE BETWEEN SECUNDERABAD - WADI STATIONS"
+        track_spacing_m: 5.30
+        note_6: "6. ALL EXISTING DETAILS SHOWN ARE PERTAINING TO EXG. UP AND DN LINES, INCLUDING CURVE DETAILS."
+        note_8: "8. THE DIFFERENCE BETWEEN F.L. TO R.L. FOR PROPOSED 3RD LINE FOR 60KG RAILS ON PSC SLEEPERS WITH 350mm BALLAST CUSHION IS 0.762m."
+      "4th_line":
+        designation: "4th Line"
+        full_title: "PROPOSED 3RD & 4TH LINES (QUADRUPLING)"
+        project_title: "PROPOSED 3RD AND 4TH LINES BETWEEN SECUNDERABAD - WADI STATIONS"
+        track_spacing_m: 6.00
+        note_6: "6. ALL EXISTING DETAILS SHOWN ARE PERTAINING TO EXG. UP AND DN LINES, INCLUDING CURVE DETAILS."
+        note_8: "8. THE DIFFERENCE BETWEEN F.L. TO R.L. FOR PROPOSED 3RD & 4TH LINES FOR 60KG RAILS ON PSC SLEEPERS WITH 350mm BALLAST CUSHION IS 0.762m."
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# DTM Cloud Storage & Real-Time Surface Profile Sampling Settings
+# ------------------------------------------------------------------------------
+dtm_settings:
+  storage_dir: "storage/dtm"
+  db_backend: "postgres"               # "postgres" | "sqlite"
+  postgres:
+    host: "localhost"
+    port: 5432
+    dbname: "esp_db"
+    user: "postgres"
+    password: "postgres"
+  db_path: "storage/dtm/dtm_registry.sqlite"  # Fallback SQLite path
+  default_s3_bucket: "esp-railway-dtm-bucket"
+  default_s3_region: "ap-south-1"
+  presigned_url_expiration_seconds: 1800
+  datum_margin_m: 5.0
+  datum_round_m: 10.0
+  max_sampling_points: 50000
+
+# ------------------------------------------------------------------------------
+# Greenfield PostgreSQL Database Repository Settings (database_schema.sql)
+# Maps live platform tables (projects, project_lsections, lsection_versions,
+# lsection_band_points, lsection_curves, lsection_gradients, lsection_stations,
+# lsection_sheets, sites/bridges/lsections/hydrology) into CompositeDrawer.
+# ------------------------------------------------------------------------------
+greenfield_db:
+  database_url_env: "DATABASE_URL"
+  connect_timeout_s: 10
+  soft_delete_sheets: true             # true -> mark old lsection_sheets as DELETED on re-run
+  buildup_tolerance_m: 0.005           # m — allowable rounding tolerance on (PRL - PFL = track_buildup_m)
+  cut_fill_tolerance_m: 0.02           # m — allowable rounding tolerance on (cut_fill = PFL - EGL)
+  default_version_status: "GENERATED"
+  postgres:
+    host: "localhost"
+    port: 5432
+    dbname: "esp_db"
+    user: "postgres"
+    password: "postgres"
+  band_value_aliases:
+    elevation_m:
+      - "egl"
+      - "ogl"
+      - "ground_level"
+      - "ground_level_m"
+      - "elevation_m"
+      - "ground_line"
+      - "existing_ground_level"
+    formation_level_m:
+      - "pfl"
+      - "formation_level"
+      - "formation_level_m"
+      - "proposed_formation_level"
+      - "fl"
+    proposed_rail_level_m:
+      - "prl"
+      - "proposed_rail_level"
+      - "proposed_rail_level_m"
+      - "prop_rail_level"
+      - "rl"
+    existing_formation_level_m:
+      - "efl"
+      - "existing_formation_level"
+      - "existing_formation_level_m"
+      - "ex_formation_level"
+    existing_rail_level_m:
+      - "erl"
+      - "existing_rail_level"
+      - "existing_rail_level_m"
+      - "ex_rail_level"
+    cut_fill_m:
+      - "cut_fill"
+      - "cut_fill_m"
+      - "bank_cutting"
+      - "bank_cut"
+      - "height_bank_cutting"
+    diff_rail_level_m:
+      - "diff_rail_level"
+      - "diff_rail_level_m"
+      - "diff_prl_erl"
+      - "diff_prl_erl_m"
+    easting_m:
+      - "easting"
+      - "easting_m"
+      - "g_easting_m"
+      - "x"
+    northing_m:
+      - "northing"
+      - "northing_m"
+      - "g_northing_m"
+      - "y"

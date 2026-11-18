@@ -111,4 +111,4 @@ def test_api_routes_registered():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ONLINE"
-    assert len(data["endpoints"]) == 6
+    assert len(data["endpoints"]) == 10

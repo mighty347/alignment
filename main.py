@@ -24,6 +24,7 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
 from utils.logger import get_logger
 from alignment_router import router as alignment_router
+from vertical_router import router as vertical_router
 from greenfield.greenfield_router import (
     OUTPUTS_DIR as GREENFIELD_OUTPUTS_DIR,
     router as greenfield_router,
@@ -84,8 +85,9 @@ app.add_middleware(
 GREENFIELD_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=GREENFIELD_OUTPUTS_DIR), name="outputs")
 
-# Register Alignment, DTM & Greenfield Composite Routes
+# Register Alignment, Vertical Formation, DTM & Greenfield Composite Routes
 app.include_router(alignment_router)
+app.include_router(vertical_router)
 app.include_router(greenfield_router)
 
 
@@ -124,6 +126,7 @@ def root():
         "endpoints": [
             "POST /detect",
             "POST /api/v1/alignment-studio/detect",
+            "POST /api/v1/alignment-studio/vertical/generate-formation",
             "GET  /api/v1/greenfield/composite/preview/{version_id}",
             "POST /api/v1/greenfield/composite/generate",
             "GET  /api/v1/greenfield/composite/jobs/{job_id}",

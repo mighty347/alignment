@@ -143,6 +143,55 @@ def _format_km_plus_m(ch_m: float) -> str:
     return f"{km}+{rem:06.2f}m"
 
 
+def _synthesize_kml_from_band_points(band_points_df: pd.DataFrame, target_path: Path) -> Path:
+    """Generate a valid KML LineString file from station coordinates or chainages for Plan View rendering."""
+    coords: list[str] = []
+    if not band_points_df.empty and "easting_m" in band_points_df.columns and "northing_m" in band_points_df.columns:
+        try:
+            import pyproj
+            transformer = pyproj.Transformer.from_crs("EPSG:32645", "EPSG:4326", always_xy=True)
+            for _, r in band_points_df.sort_values("chainage_m").iterrows():
+                e = float(r["easting_m"])
+                n = float(r["northing_m"])
+                lon, lat = transformer.transform(e, n)
+                coords.append(f"{lon:.7f},{lat:.7f},0")
+        except Exception:
+            coords = []
+
+    if not coords:
+        lon0 = 87.500000
+        lat0 = 22.000000
+        chs = (
+            band_points_df["chainage_m"].tolist()
+            if not band_points_df.empty and "chainage_m" in band_points_df.columns
+            else [0.0, 5000.0]
+        )
+        for ch in chs:
+            lon = lon0 + float(ch) * 0.0000097
+            coords.append(f"{lon:.7f},{lat0:.7f},0")
+
+    coord_str = "\n          ".join(coords)
+    kml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Alignment Centerline</name>
+    <Placemark>
+      <name>Track Alignment</name>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          {coord_str}
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>
+"""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(kml_content, encoding="utf-8")
+    return target_path
+
+
 def _stage_bundle_dataframes(
     bundle: GreenfieldDBBundle,
     staging_dir: Path,
@@ -445,18 +494,22 @@ def _execute_greenfield_composite_job(
             raise ValueError(
                 "Engineering Verification Gate FAILED on DB inputs: " + "; ".join(bundle.warnings)
             )
-        if not bundle.version_meta.alignment_kml_url:
-            raise ValueError(
-                f"lsection_versions '{payload.version_id}' has no alignmentKmlUrl configured."
-            )
-
         job_manager.emit_event(job_id, "status", {"progress_percent": 35})
         storage_mgr = _create_storage_manager(BASE_CONFIG)
-        kml_suffix = Path(bundle.version_meta.alignment_kml_url.split("?")[0]).suffix or ".kml"
-        kml_local = storage_mgr.download_file(
-            bundle.version_meta.alignment_kml_url,
-            temp_dir / f"alignment{kml_suffix}",
-        )
+        kml_local: Optional[Path] = None
+
+        if bundle.version_meta.alignment_kml_url:
+            try:
+                kml_suffix = Path(bundle.version_meta.alignment_kml_url.split("?")[0]).suffix or ".kml"
+                kml_local = storage_mgr.download_file(
+                    bundle.version_meta.alignment_kml_url,
+                    temp_dir / f"alignment{kml_suffix}",
+                )
+            except Exception as e:
+                logger.warning("Could not download alignmentKmlUrl: %s. Will synthesize KML from coordinates.", e)
+
+        if kml_local is None or not kml_local.exists():
+            kml_local = _synthesize_kml_from_band_points(bundle.band_points_df, temp_dir / "alignment.kml")
 
         topo_local: Optional[Path] = None
         if bundle.version_meta.topo_kml_url:

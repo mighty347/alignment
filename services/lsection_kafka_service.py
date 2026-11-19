@@ -408,184 +408,76 @@ class LSectionKafkaService:
         return s3_url
 
     def process_request(self, payload: dict[str, Any]) -> None:
-        """Process incoming request: Query DB -> Render DXF -> Upload -> Emit Response."""
-        version_id = payload.get("versionId") or payload.get("siteVersionId")
-        corridor_id = payload.get("corridorId") or payload.get("lsectionId")
+        """Process incoming request: Query DB -> Render Complete Composite DXF -> Upload -> Emit Response."""
+        version_id = (
+            payload.get("versionId")
+            or payload.get("siteVersionId")
+            or payload.get("version_id")
+        )
+        corridor_id = (
+            payload.get("corridorId")
+            or payload.get("lsectionId")
+            or payload.get("corridor_id")
+        )
 
         if not version_id:
             logger.error("Missing versionId in payload: %s", payload)
             return
 
         logger.info(
-            "=== Starting L-Section DXF Generation for versionId=%s, corridorId=%s ===",
+            "=== Starting Composite Plan & Profile DXF Generation via Channel B for versionId=%s, corridorId=%s ===",
             version_id,
             corridor_id,
         )
 
-        db_data = self.fetch_alignment_data(version_id, corridor_id or "")
-        prof_df = self.parse_band_points(db_data["band_points"])
+        try:
+            from greenfield.greenfield_models import GreenfieldCompositeGenerateRequest
+            from greenfield.greenfield_router import _execute_greenfield_composite_job
 
-        if prof_df.empty:
-            raise ValueError(f"No survey band points found for version '{version_id}'.")
-
-        # Prepare Gradients DataFrame for Vertical Geometry
-        grad_rows = db_data["gradients"]
-        vip_df = pd.DataFrame(grad_rows)
-        if not vip_df.empty:
-            vip_df["chainage_m"] = vip_df["startChainage"].astype(float)
-            vip_df["elevation_m"] = vip_df["startRl"].astype(float)
-            vip_df["gradient_pct"] = vip_df.apply(
-                lambda r: (
-                    (float(r["endRl"]) - float(r["startRl"]))
-                    / max(0.001, float(r["endChainage"]) - float(r["startChainage"]))
-                ) * 100.0,
-                axis=1,
+            req = GreenfieldCompositeGenerateRequest(
+                version_id=str(version_id),
+                s3_output_bucket=self.s3_bucket,
+                generate_sheet_drawings=True,
+                export_pdf=False,
             )
+            job_id = f"kafka_{uuid.uuid4().hex[:12]}"
 
-        # Prepare Curves DataFrame for Horizontal Geometry
-        curve_rows = db_data["curves"]
-        ip_df = pd.DataFrame(curve_rows)
-        if not ip_df.empty:
-            ip_df["chainage_m"] = ip_df["startChainage"].astype(float)
-            ip_df["radius_m"] = ip_df["radiusM"].astype(float)
-            ip_df["transition_length_m"] = ip_df["transitionLengthM"].fillna(0).astype(float)
-            ip_df["curve_length_m"] = ip_df["lengthM"].astype(float)
-            ip_df["circular_curve_length_m"] = ip_df.apply(
-                lambda r: max(1.0, float(r["curve_length_m"]) - 2.0 * float(r["transition_length_m"])),
-                axis=1,
-            )
-            ip_df["tptc_chainage_m"] = ip_df["startChainage"].astype(float)
-            ip_df["tpcc_chainage_m"] = ip_df["tptc_chainage_m"] + ip_df["transition_length_m"]
-            ip_df["ctpc_chainage_m"] = ip_df["tpcc_chainage_m"] + ip_df["circular_curve_length_m"]
-            ip_df["ctpt_chainage_m"] = ip_df["endChainage"].astype(float)
+            logger.info("Running Composite Plan & Profile engine for Job %s...", job_id)
+            sheet_items = _execute_greenfield_composite_job(req, job_id, request=None)
 
-        # Determine Sheets (Existing cuts or auto 5km chunks)
-        sheet_records = db_data["sheets"]
-        sheet_targets: list[dict[str, Any]] = []
+            generated_sheets: list[dict[str, Any]] = []
+            for item in sheet_items:
+                final_dxf_url = item.dxf_url
+                if not final_dxf_url and item.local_dxf_path and self.s3_bucket:
+                    try:
+                        final_dxf_url = self.upload_dxf(Path(item.local_dxf_path), version_id, item.sheet_number)
+                    except Exception as up_err:
+                        logger.warning("Could not upload sheet %d to S3: %s", item.sheet_number, up_err)
 
-        if sheet_records:
-            logger.info("Found %d pre-existing sheet cuts in lsection_sheets.", len(sheet_records))
-            for s in sheet_records:
-                sheet_targets.append({
-                    "id": s["id"],
-                    "sheetNumber": int(s["sheetNumber"]),
-                    "start": float(s["startChainage"]),
-                    "end": float(s["endChainage"]),
-                    "datum": float(s["datumRl"]) if s.get("datumRl") else None,
+                generated_sheets.append({
+                    "sheetNumber": item.sheet_number,
+                    "sheetId": item.sheet_id,
+                    "startChainage": item.start_chainage_m,
+                    "endChainage": item.end_chainage_m,
+                    "datumRl": item.datum_rl_m,
+                    "dxfUrl": final_dxf_url or item.local_dxf_path,
                 })
-        else:
-            # Auto-split by 5km
-            min_ch = float(prof_df["chainage_m"].min())
-            max_ch = float(prof_df["chainage_m"].max())
-            logger.info("No pre-existing sheets found. Auto-chunking corridor (%.1f to %.1f m) by 5000m.", min_ch, max_ch)
-            curr = min_ch
-            s_num = 1
-            while curr < max_ch:
-                next_ch = min(curr + 5000.0, max_ch)
-                sheet_targets.append({
-                    "id": str(uuid.uuid4()),
-                    "sheetNumber": s_num,
-                    "start": curr,
-                    "end": next_ch,
-                    "datum": None,
-                })
-                curr = next_ch
-                s_num += 1
 
-        total_sheets = len(sheet_targets)
-        drawer = LSectionDrawer({})
-        generated_sheets: list[dict[str, Any]] = []
-
-        with self._get_db_connection() as conn:
-            with conn.cursor() as cur:
-                for target in sheet_targets:
-                    s_num = target["sheetNumber"]
-                    s_start = target["start"]
-                    s_end = target["end"]
-
-                    dxf_filename = f"lsection_{version_id}_sheet_{s_num}.dxf"
-                    dxf_path = self.outputs_dir / dxf_filename
-
-                    logger.info("Rendering Sheet #%d (Km %.2f to Km %.2f)...", s_num, s_start / 1000.0, s_end / 1000.0)
-
-                    # Slice profile data
-                    mask = (prof_df["chainage_m"] >= s_start - 0.01) & (prof_df["chainage_m"] <= s_end + 0.01)
-                    sub_prof = prof_df[mask].copy()
-                    if sub_prof.empty:
-                        sub_prof = prof_df.iloc[[0]].copy()
-
-                    # Render DXF Sheet
-                    doc, msp = drawer._setup_document()
-                    drawer._render_lsection_sheet(
-                        msp=msp,
-                        prof_df=sub_prof,
-                        vip_df=vip_df,
-                        ip_df=ip_df,
-                        start_ch=s_start,
-                        end_ch=s_end,
-                        sheet_index=s_num,
-                        total_sheets=total_sheets,
-                    )
-                    doc.saveas(dxf_path)
-                    logger.info("Generated DXF: %s (%d bytes)", dxf_path.name, dxf_path.stat().st_size)
-
-                    # Upload to S3/MinIO
-                    dxf_url = self.upload_dxf(dxf_path, version_id, s_num)
-
-                    generated_sheets.append({
-                        "sheetNumber": s_num,
-                        "dxfUrl": dxf_url,
-                    })
-
-                    # Calculate datum RL
-                    min_elev = float(sub_prof["elevation_m"].min()) if not sub_prof.empty else 100.0
-                    datum_rl = math.floor((min_elev - 5.0) / 10.0) * 10.0
-
-                    # Upsert into lsection_sheets
-                    cur.execute("""
-                        INSERT INTO public.lsection_sheets (
-                            id, "versionId", "sheetNumber", title,
-                            "startChainage", "endChainage", "datumRl",
-                            "hScale", "vScale", "vExaggeration", "dxfUrl"
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (id) DO UPDATE SET
-                            "dxfUrl" = EXCLUDED."dxfUrl",
-                            "datumRl" = EXCLUDED."datumRl",
-                            "updatedAt" = CURRENT_TIMESTAMP;
-                    """, (
-                        target["id"],
-                        version_id,
-                        s_num,
-                        f"Sheet {s_num} (Km {s_start/1000.0:.2f} to {s_end/1000.0:.2f})",
-                        s_start,
-                        s_end,
-                        datum_rl,
-                        5000,
-                        500,
-                        10.0,
-                        dxf_url,
-                    ))
-
-                # Update master version dxfUrl with Sheet 1 URL and status GENERATED
-                primary_url = generated_sheets[0]["dxfUrl"] if generated_sheets else None
-                cur.execute("""
-                    UPDATE public.lsection_versions
-                    SET "dxfUrl" = %s,
-                        status = 'GENERATED',
-                        "updatedAt" = CURRENT_TIMESTAMP
-                    WHERE id = %s;
-                """, (primary_url, version_id))
-
-                conn.commit()
-
-        # Step 4: Publish Kafka Response
-        response_payload = {
-            "versionId": version_id,
-            "corridorId": corridor_id,
-            "sheets": generated_sheets,
-            "status": "SUCCESS",
-        }
+            response_payload = {
+                "versionId": version_id,
+                "corridorId": corridor_id,
+                "sheets": generated_sheets,
+                "status": "SUCCESS",
+            }
+        except Exception as ex:
+            logger.exception("Failed to generate composite DXF for versionId=%s: %s", version_id, ex)
+            response_payload = {
+                "versionId": version_id,
+                "corridorId": corridor_id,
+                "status": "FAILED",
+                "error": str(ex),
+                "sheets": [],
+            }
 
         def _delivery_report(err, msg):
             if err is not None:
@@ -601,7 +493,7 @@ class LSectionKafkaService:
                 callback=_delivery_report,
             )
             self.producer.flush(timeout=5.0)
-            logger.info("Published SUCCESS response to topic '%s': %s", self.response_topic, response_payload)
+            logger.info("Published response to topic '%s': %s", self.response_topic, response_payload)
         else:
             logger.warning("Producer not initialized. Response not emitted to Kafka.")
 

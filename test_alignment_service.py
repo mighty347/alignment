@@ -89,4 +89,4 @@ def test_api_routes_registered():
     data = response.json()
     assert data["status"] == "ONLINE"
     assert any("/detect" in ep for ep in data["endpoints"])
-
+    assert "POST /api/v1/alignment-studio/vertical/generate-formation" in data["endpoints"]

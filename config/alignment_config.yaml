@@ -81,3 +81,132 @@ topo_overlay:
   default_opacity: 0.9
   point_min_zoom: 13
   label_min_zoom: 17
+
+vertical_standards:
+  # Track Structure & Elevation Buildup (IRS SOD BG 1676mm)
+  # 350mm ballast cushion + 240mm PSC sleeper + 172mm 60kg UIC rail = 0.762m
+  track_buildup_m: 0.762
+
+  # Gradients (RDSO GE:G-1 & IRPWM Para 408)
+  terrain_type: "plains"                  # plains | hills | dfc
+  ruling_gradient_plains: 0.006667        # 1 in 150 (0.667%)
+  ruling_gradient_hills: 0.01             # 1 in 100 (1.000%)
+  ruling_gradient_dfc: 0.005              # 1 in 200 (0.500%)
+  min_gradient: 0.001                     # 1 in 1000 (0.100%) recommended drainage minimum
+  station_max_gradient: 0.0025            # 1 in 400 (0.250%) max gradient in station/yard limits
+  platform_desirable_gradient: 0.001      # 1 in 1000 desirable gradient on platforms
+  level_gradient_threshold: 0.0001        # |g| <= 0.0001 (0.01%) classified as LEVEL
+  grade_compensation_factor: 70.0         # BG IRPWM Para 408: 0.04%/deg = 70/R (%)
+
+  # Standard RDSO Quantized Gradient Denominators (0.0 = LEVEL)
+  standard_gradient_denominators: [0, 1000, 500, 400, 300, 250, 200, 170, 150, 120, 100]
+
+  # Tangent & PVI Spacing
+  min_tangent_length_m: 500.0             # Minimum straight tangent between PVIs (m)
+  max_tangent_length_m: 1500.0            # Maximum optimizer lookahead tangent length (m)
+  min_optimizer_reach_m: 50.0             # Minimum viable reach for a candidate gradient (m)
+  endpoint_snap_distance_m: 50.0          # Snap near-end tangent directly to final chainage (m)
+
+  # Parabolic Vertical Curves (IRPWM Para 409)
+  min_grade_change_for_vc: 0.004          # 0.40% (Greenfield BG); 0.002 for Brownfield/Group A
+  min_vc_length_m: 60.0                   # Absolute minimum VC length (m)
+  min_rv_summit_m: 4000.0                 # Minimum summit vertical curve radius @ 160 km/h (m)
+  min_rv_sag_m: 3000.0                    # Minimum sag vertical curve radius @ 160 km/h (m)
+  vc_overlap_headroom_ratio: 0.85         # Max combined half-VC fraction of inter-PVI span
+
+  # Subgrade Drainage & Earthwork Limits (RDSO GE:G-1 & GE:0067)
+  min_drainage_clearance_m: 0.60          # Minimum embankment PFL above EGL (m)
+  target_embankment_clearance_m: 1.00     # Preferred initial embankment PFL above EGL (m)
+  max_cut_fill_transition_m: 160.0        # Max contiguous span allowed in cut/fill crossing band (m)
+  max_excess_cut_m: 12.0                  # Maximum permitted cutting depth (m)
+  max_excess_fill_m: 12.0                 # Maximum permitted embankment height (m)
+
+  # Bridge, RUB & HFL Clearances (IRBM Para 106 / IRC:SP:34)
+  min_hfl_clearance_m: 0.60               # Minimum PFL freeboard above HFL (m)
+  bridge_ramp_lookahead_m: 2000.0         # Lookahead window to initiate bridge ramp (m)
+  bridge_dedup_spacing_m: 25.0            # Deduplication spacing for constraints (m)
+  bridge_clearance_tolerance_m: 0.02      # Allowed numerical tolerance on bridge PFL (m)
+  bridge_summit_lift_step_m: 0.05         # Extra safety lift when compensating summit sag (m)
+  max_summit_lift_iterations: 6           # Max iterative summit lifts for bridge clearance
+  bridge_clearances_m:
+    MAJOR_BRIDGE: 4.0
+    RIVER: 4.0
+    EXISTING_BRIDGE: 4.0
+    MINOR_BRIDGE: 2.5
+    CANAL: 2.5
+    BOX_CULVERT: 1.5
+    RUB_NH: 6.1
+    RUB_LOCAL: 5.0
+    ROB: 0.0
+    LC: 0.0
+    TIE_IN: 0.0
+
+  # Structural Depths above (HFL + Clearance) by Bridge Type (RDSO / IRBM Para 106)
+  bridge_structural_depths_m:
+    HP: 0.50                              # Hume pipe crown cushion (m)
+    RCCBOX: 0.50                          # RCC Box top slab + cushion (m)
+    PSCSLAB: 0.90                         # PSC Slab structural depth (m)
+    SLAB: 0.90                            # RCC/PSC Slab structural depth (m)
+    COMPOSITE_GIRDER: 1.80                # Composite steel+concrete girder depth (m)
+    GIRDER_PSC: 1.80                      # Girder + PSC composite depth (m)
+    OPEN_WEB_GIRDER: 2.20                 # Steel Open Web Girder depth (m)
+    DEFAULT_MINOR: 0.60                   # Fallback minor bridge structural depth (m)
+    DEFAULT_MAJOR: 1.50                   # Fallback major bridge structural depth (m)
+
+  # Bridge Approach & Level Crossing Flat Gradient Zones (IRBM Para 102 / IRPWM)
+  bridge_approach_gradient_limit: 0.0025  # 1 in 400 max gradient across major bridge & approaches
+  bridge_approach_length_m: 30.0          # Approach protection length each side of abutments (m)
+  lc_gradient_limit: 0.001                # 1 in 1000 max gradient across Level Crossing (LC)
+  lc_check_length_m: 30.0                 # Protection zone each side of Level Crossing (m)
+
+  # Railway Station Yard Flat Limits (IRSOD BG / IRPWM)
+  station_yard_half_length_m: 500.0       # Default yard half-length around station C/L (m)
+  station_yard_half_lengths_by_class_m:
+    A: 650.0
+    B: 500.0
+    C: 350.0
+    D: 250.0
+    HALT: 200.0
+
+  # Railway Station Input Column Aliases (aligned with Station_Excel.xlsx schema)
+  station_column_aliases:
+    name: ["Name of station", "Station Name", "Station", "Name", "name"]
+    location_km: ["Location (km)", "Location (Km)", "location_km"]
+    chainage_m: ["Chainage (m)", "chainage_m", "Chainage", "chainage"]
+    start_chainage_m: ["Start Chainage (m)", "start_chainage_m"]
+    end_chainage_m: ["End Chainage (m)", "end_chainage_m"]
+    station_class: ["Class of station", "Station Class", "station_class", "class"]
+    max_gradient: ["Max Gradient", "max_gradient"]
+
+  # API Boundary Limits
+  max_api_stations: 100000
+
+  # Bridge List Input Column Aliases (aligned with Bridge_List.xlsx schema)
+  bridge_column_aliases:
+    bridge_no: ["Bridge No.", "Bridge No", "Br No", "bridge_no"]
+    bridge_type: ["Bridge Type", "Bridge Type / Description", "Structure Type", "bridge_type"]
+    chainage: ["Approx. Chainage (km)", "Chainage (m)", "Chainage", "chainage_m", "chainage"]
+    proposed_span: ["Proposed Span", "Span", "proposed_span"]
+    configuration: ["Configration", "Configuration", "Category", "Bridge Category", "configuration"]
+    description: ["Bridge Type / Description", "Description", "description"]
+    detail: ["Bridge Detail", "Detail", "Remarks", "detail"]
+    bed_level: ["Bed Level", "Bed Level (m)", "bed_level_m", "bed_level"]
+    hfl: ["HFL", "HFL (m)", "High Flood Level", "hfl_m", "hfl"]
+    clearance: ["Clearance", "Clearance (m)", "Freeboard", "clearance_m", "clearance"]
+
+  # Proposed Gradient Extraction from Station PFL
+  gradient_merge_tolerance: 0.00015       # Max slope delta to merge adjacent PFL segments
+  min_gradient_span_m: 40.0               # Minimum tangent span (>= 2 standard 20m intervals)
+  gradient_tolerance: 0.00005             # Verification tolerance on ruling/compensated gradient
+  buildup_tolerance_m: 0.000001           # Strict PRL - PFL == track_buildup_m tolerance (m)
+  drainage_tolerance_m: 0.01              # Numerical tolerance on drainage clearance check (m)
+
+  # Auto-Optimizer Multi-Criteria Scoring Weights
+  scoring:
+    reach_weight: 10.0
+    reach_reference_m: 1000.0
+    earthwork_weight: 5.0
+    imbalance_weight: 4.0
+    steepness_weight: 2.0
+    unnecessary_cut_penalty: 50.0
+    constraint_alignment_bonus: 3.0

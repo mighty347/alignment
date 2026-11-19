@@ -737,14 +737,71 @@ class LSectionDrawer:
         anno_scale: float,
     ) -> None:
         """Render gradient slope lines, change points, and slope text inside Band 1."""
-        sorted_vips = vip_df.sort_values("chainage_m").to_dict("records")
-        for idx in range(len(sorted_vips) - 1):
-            v1 = sorted_vips[idx]
-            v2 = sorted_vips[idx + 1]
+        if vip_df is None or vip_df.empty:
+            return
 
-            ch1 = float(v1.get("chainage_m", 0.0))
-            ch2 = float(v2.get("chainage_m", 0.0))
-            grad = float(v1.get("gradient", v1.get("slope", 0.0)))
+        # Normalize vip_df into discrete gradient segments: (ch1, ch2, grad, slope_ratio, direction)
+        segments: list[dict[str, Any]] = []
+
+        if "startChainage" in vip_df.columns and "endChainage" in vip_df.columns:
+            for _, r in vip_df.sort_values("startChainage").iterrows():
+                c1 = float(r.get("startChainage", 0.0))
+                c2 = float(r.get("endChainage", 0.0))
+                if c2 <= c1:
+                    continue
+                direction = str(r.get("direction", "")).strip().upper()
+                slope_ratio = float(r.get("slopeRatio") or 0.0)
+
+                # Compute gradient decimal
+                if slope_ratio > 0.0:
+                    grad = (1.0 / slope_ratio) if "FALL" not in direction else (-1.0 / slope_ratio)
+                    if "LEVEL" in direction:
+                        grad = 0.0
+                elif "gradient_pct" in r and pd.notna(r["gradient_pct"]):
+                    grad = float(r["gradient_pct"]) / 100.0
+                elif "startRl" in r and "endRl" in r and pd.notna(r["startRl"]) and pd.notna(r["endRl"]):
+                    grad = (float(r["endRl"]) - float(r["startRl"])) / (c2 - c1)
+                else:
+                    grad = float(r.get("gradient", r.get("slope", 0.0)))
+
+                segments.append({
+                    "ch1": c1,
+                    "ch2": c2,
+                    "grad": grad,
+                    "slope_ratio": slope_ratio,
+                    "direction": direction,
+                })
+        else:
+            sorted_vips = vip_df.sort_values("chainage_m").to_dict("records")
+            for idx in range(len(sorted_vips) - 1):
+                v1 = sorted_vips[idx]
+                v2 = sorted_vips[idx + 1]
+                c1 = float(v1.get("chainage_m", 0.0))
+                c2 = float(v2.get("chainage_m", 0.0))
+                if c2 <= c1:
+                    continue
+
+                if "gradient_to_next_pct" in v1 and pd.notna(v1["gradient_to_next_pct"]):
+                    grad = float(v1["gradient_to_next_pct"]) / 100.0
+                elif "gradient_pct" in v1 and pd.notna(v1["gradient_pct"]):
+                    grad = float(v1["gradient_pct"]) / 100.0
+                elif "elevation_m" in v1 and "elevation_m" in v2:
+                    grad = (float(v2["elevation_m"]) - float(v1["elevation_m"])) / (c2 - c1)
+                else:
+                    grad = float(v1.get("gradient", v1.get("slope", 0.0)))
+
+                segments.append({
+                    "ch1": c1,
+                    "ch2": c2,
+                    "grad": grad,
+                    "slope_ratio": 0.0,
+                    "direction": "",
+                })
+
+        for seg in segments:
+            ch1 = seg["ch1"]
+            ch2 = seg["ch2"]
+            grad = seg["grad"]
 
             if ch2 <= start_ch or ch1 >= end_ch:
                 continue
@@ -753,31 +810,52 @@ class LSectionDrawer:
             e_ch = min(end_ch, ch2)
             px1 = origin_x + (s_ch - start_ch)
             px2 = origin_x + (e_ch - start_ch)
+            seg_len = ch2 - ch1
 
-            # Slope line inside band
-            if abs(grad) < 1e-5:
-                # Level
+            # Determine slope line endpoints inside the band
+            if abs(grad) < 1e-5 or "LEVEL" in seg.get("direction", ""):
                 py1 = band_y + band_h / 2.0
                 py2 = py1
-                lbl = f"LEVEL (L={ch2 - ch1:.0f}m)"
-            elif grad > 0:
-                # Rising gradient
+                lbl = f"LEVEL (L={seg_len:.0f}m)"
+            elif grad > 0 or "RISE" in seg.get("direction", ""):
                 py1 = band_y + 3.0 * anno_scale
                 py2 = band_y + band_h - 3.0 * anno_scale
-                one_in = round(1.0 / grad) if grad != 0 else 0
-                lbl = f"1 IN {one_in} RISE (L={ch2 - ch1:.0f}m)"
+                if seg["slope_ratio"] > 0:
+                    one_in = int(round(seg["slope_ratio"]))
+                else:
+                    one_in = int(round(1.0 / grad)) if grad != 0 else 0
+                lbl = f"1 IN {one_in} RISE (L={seg_len:.0f}m)"
             else:
-                # Falling gradient
                 py1 = band_y + band_h - 3.0 * anno_scale
                 py2 = band_y + 3.0 * anno_scale
-                one_in = round(1.0 / abs(grad)) if grad != 0 else 0
-                lbl = f"1 IN {one_in} FALL (L={ch2 - ch1:.0f}m)"
+                if seg["slope_ratio"] > 0:
+                    one_in = int(round(seg["slope_ratio"]))
+                else:
+                    one_in = int(round(1.0 / abs(grad))) if grad != 0 else 0
+                lbl = f"1 IN {one_in} FALL (L={seg_len:.0f}m)"
 
-            msp.add_line((px1, py1), (px2, py2), dxfattribs={"layer": "ESP_GEOM_TEXT", "color": self.COL_RED, "lineweight": 25})
-            msp.add_text(
-                lbl,
-                dxfattribs={"height": 2.2 * anno_scale, "layer": "ESP_GEOM_TEXT", "style": "ESP_STYLE", "color": self.COL_RED},
-            ).set_placement(((px1 + px2) / 2.0, band_y + band_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
+            # Draw slope tangent line
+            msp.add_line(
+                (px1, py1), (px2, py2),
+                dxfattribs={"layer": "ESP_GEOM_TEXT", "color": self.COL_RED, "lineweight": 25},
+            )
+            # Draw vertical segment boundary line at segment start
+            if origin_x - 0.5 <= px1 <= origin_x + (end_ch - start_ch) + 0.5:
+                msp.add_line(
+                    (px1, band_y), (px1, band_y + band_h),
+                    dxfattribs={"layer": "ESP_GEOM_TEXT", "color": self.COL_RED, "lineweight": 18},
+                )
+            # Draw segment label if space permits
+            if (px2 - px1) > 25.0 * anno_scale:
+                msp.add_text(
+                    lbl,
+                    dxfattribs={
+                        "height": 2.2 * anno_scale,
+                        "layer": "ESP_GEOM_TEXT",
+                        "style": "ESP_STYLE",
+                        "color": self.COL_RED,
+                    },
+                ).set_placement(((px1 + px2) / 2.0, band_y + band_h / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
 
     def _draw_horizontal_geometry_band(
         self,

@@ -274,12 +274,18 @@ def _build_greenfield_session_config(
         cfg.setdefault("horizontal", {})["end_chainage_m"] = float(end_ch)
         drawing_cfg["end_chainage_m"] = float(end_ch)
 
-    drawing_cfg["plan_scale"] = float(payload.plan_scale or drawing_cfg.get("plan_scale", 5000.0))
-    drawing_cfg["profile_h_scale"] = float(payload.profile_h_scale or drawing_cfg.get("profile_h_scale", 5000.0))
-    drawing_cfg["profile_v_scale"] = float(payload.profile_v_scale or drawing_cfg.get("profile_v_scale", 500.0))
+    drawing_cfg["plan_scale"] = float(
+        getattr(payload, "plan_scale", None) or drawing_cfg.get("plan_scale", 5000.0)
+    )
+    drawing_cfg["profile_h_scale"] = float(
+        getattr(payload, "profile_h_scale", None) or drawing_cfg.get("profile_h_scale", 5000.0)
+    )
+    drawing_cfg["profile_v_scale"] = float(
+        getattr(payload, "profile_v_scale", None) or drawing_cfg.get("profile_v_scale", 500.0)
+    )
     drawing_cfg["max_lsection_length_m"] = float(
-        payload.max_sheet_length_m
-        if payload.max_sheet_length_m is not None
+        getattr(payload, "max_sheet_length_m", None)
+        if getattr(payload, "max_sheet_length_m", None) is not None
         else drawing_cfg.get("max_lsection_length_m", 5000.0)
     )
     drawing_cfg["generate_complete_profile"] = payload.generate_complete_profile

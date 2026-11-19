@@ -3410,10 +3410,11 @@ class BrownfieldProfileDrawer:
 
                 c_prefix = "EXT. CURVE" if is_ext else "CURVE"
                 default_lbl = "EXG UP LINE" if is_ext else "PRO 3RD LINE"
+                delta_str = c.get("delta_str", '0°00\'00"')
                 lines = [
                     f"{c_prefix} NO.{c.get('curve_no', '')}({c.get('direction', '')})",
                     f"{c.get('line_label', default_lbl)}",
-                    f"Δ={c.get('delta_str', '0°00\'00\"')}",
+                    f"Δ={delta_str}",
                     f"D={float(c.get('degree', 0.0)):.3f}°",
                     f"R={r_str}",
                     f"TL={float(c.get('tl', 0.0)):.3f}M",

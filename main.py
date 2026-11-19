@@ -20,6 +20,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
 from utils.logger import get_logger
 from alignment_router import router as alignment_router
@@ -38,9 +39,26 @@ app = FastAPI(
         "Composite Plan & L-Section Generation."
     ),
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=None,  # Custom relative handler below
+    redoc_url=None,  # Custom relative handler below
 )
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url="openapi.json",
+        title=app.title + " - Swagger UI",
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+    )
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_html():
+    return get_redoc_html(
+        openapi_url="openapi.json",
+        title=app.title + " - ReDoc",
+        redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js",
+    )
 
 # Configure CORS
 _cors_origins = [
@@ -77,6 +95,25 @@ async def startup_event() -> None:
     logger.info("Greenfield outputs directory: %s", GREENFIELD_OUTPUTS_DIR)
     logger.info("Total registered routes: %d", len(app.routes))
 
+    # Optional auto-start of L-Section Kafka Consumer thread
+    if os.environ.get("ENABLE_KAFKA_CONSUMER", "true").lower() in ("true", "1", "yes"):
+        try:
+            from services.lsection_kafka_service import LSectionKafkaService
+            LSectionKafkaService.get_instance().start()
+            logger.info("L-Section Kafka Consumer background service started.")
+        except Exception as e:
+            logger.warning("Could not start L-Section Kafka Consumer on startup: %s", e)
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    try:
+        from services.lsection_kafka_service import LSectionKafkaService
+        LSectionKafkaService.get_instance().stop()
+        logger.info("L-Section Kafka Consumer stopped cleanly.")
+    except Exception as e:
+        logger.warning("Error stopping L-Section Kafka Consumer: %s", e)
+
 
 @app.get("/")
 def root():
@@ -85,12 +122,8 @@ def root():
         "service": "Railway Alignment, DTM & Greenfield Composite Service",
         "version": "1.0.0",
         "endpoints": [
+            "POST /detect",
             "POST /api/v1/alignment-studio/detect",
-            "GET  /api/v1/jobs/{job_id}/status",
-            "GET  /api/v1/jobs/{job_id}/stream",
-            "POST /api/v1/alignment-studio/dtm/query",
-            "POST /api/v1/alignment-studio/survey/generate-centerline",
-            "POST /api/v1/alignment-studio/survey/generate-centerline-path",
             "GET  /api/v1/greenfield/composite/preview/{version_id}",
             "POST /api/v1/greenfield/composite/generate",
             "GET  /api/v1/greenfield/composite/jobs/{job_id}",

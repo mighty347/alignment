@@ -41,48 +41,26 @@ with CONFIG_PATH.open(encoding="utf-8") as _f:
 
 try:
     from alignment.utils.logger import get_logger
-    from alignment.alignment_models import (
-        DTMQueryRequest,
-        GenerateCenterlinePathRequest,
-        JobRecord,
-        JobStatus,
-        PlanProfileResponse,
-    )
-    from alignment.job_manager import job_manager
+    from alignment.alignment_models import PlanProfileResponse
     from alignment.geospatial.kml_ingestor import KMLAlignmentIngestor
     from alignment.horizontal.pi_detector import detect_pis
     from alignment.horizontal.curve_solver import CurveDirection, HorizontalCurveSolver
     from alignment.horizontal.alignment_curve_calculator import AlignmentCurveCalculator, CalculatedAlignment
-    from alignment.modules.dtm_manager import DTMManager
-    from alignment.modules.survey_reader import BrownfieldSurveyReader, SurveyReaderError
 except ImportError:
     from utils.logger import get_logger
-    from alignment_models import (
-        DTMQueryRequest,
-        GenerateCenterlinePathRequest,
-        JobRecord,
-        JobStatus,
-        PlanProfileResponse,
-    )
-    from job_manager import job_manager
+    from alignment_models import PlanProfileResponse
     from geospatial.kml_ingestor import KMLAlignmentIngestor
     from horizontal.pi_detector import detect_pis
     from horizontal.curve_solver import CurveDirection, HorizontalCurveSolver
     from horizontal.alignment_curve_calculator import AlignmentCurveCalculator, CalculatedAlignment
-    from modules.dtm_manager import DTMManager
-    from modules.survey_reader import BrownfieldSurveyReader, SurveyReaderError
 
 logger = get_logger("AlignmentServiceRouter")
 
-router = APIRouter(tags=["Railway Alignment & DTM Service"])
+router = APIRouter(tags=["Railway Alignment Detection Service"])
 
 MIB = 1024 * 1024
 MAX_UPLOAD_BYTES = int(os.environ.get("ESP_ALIGNMENT_MAX_UPLOAD_MIB", "100")) * MIB
 MAX_KML_BYTES = int(os.environ.get("ESP_ALIGNMENT_MAX_KML_MIB", "100")) * MIB
-MAX_SURVEY_POINTS = 100000
-MAX_STATIONS = 100000
-
-dtm_manager = DTMManager()
 
 
 # ------------------------------------------------------------------------------
@@ -364,9 +342,10 @@ def _detect(
 
 
 # ------------------------------------------------------------------------------
-# 1. Endpoint: /detect (Horizontal Alignment PI & Curve Detection)
+# Endpoint: /detect (Horizontal Alignment PI & Curve Detection)
 # ------------------------------------------------------------------------------
-@router.post("/api/v1/alignment-studio/detect", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/detect", response_model=PlanProfileResponse, status_code=status.HTTP_200_OK)
+@router.post("/api/v1/alignment-studio/detect", response_model=PlanProfileResponse, status_code=status.HTTP_200_OK)
 async def detect_alignment(
     file: UploadFile = File(...),
     simplification_tolerance_m: float = Form(5.0),
@@ -374,22 +353,22 @@ async def detect_alignment(
     start_chainage_m: float = Form(0.0),
     line_index: Optional[int] = Form(None),
 ):
-    """Detect horizontal alignment PIs and curve geometry from an uploaded KML/KMZ file."""
+    """Detect horizontal alignment PIs and curve geometry synchronously from an uploaded KML/KMZ file."""
     name = (file.filename or "").lower()
     if not name.endswith((".kml", ".kmz")):
-        raise HTTPException(400, "Please upload a valid .kml or .kmz file")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please upload a valid .kml or .kmz file")
 
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     await file.close()
     if not data:
-        raise HTTPException(400, "Uploaded file is empty")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Uploaded file is empty")
     if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"File exceeds {MAX_UPLOAD_BYTES // MIB} MiB upload limit")
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, f"File exceeds {MAX_UPLOAD_BYTES // MIB} MiB upload limit")
 
-    job = job_manager.create_job(project_name="Horizontal Alignment Detection")
-    asyncio.create_task(
-        job_manager.execute_job(
-            job.job_id,
+    try:
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(
+            None,
             _detect,
             data,
             name.endswith(".kmz"),
@@ -398,159 +377,9 @@ async def detect_alignment(
             line_index,
             start_chainage_m,
         )
-    )
-    return {"job_id": job.job_id}
-
-
-# ------------------------------------------------------------------------------
-# 2. Endpoints: /jobs/{job_id}/status & /stream (Status Polling & SSE)
-# ------------------------------------------------------------------------------
-@router.get("/api/v1/jobs/{job_id}/status", status_code=status.HTTP_200_OK)
-async def get_job_status(job_id: str) -> dict[str, Any]:
-    """Retrieve status and detected alignment geometry for a detection job."""
-    job = job_manager.get_job(job_id)
-    if not job:
-        raise HTTPException(404, f"Job '{job_id}' not found")
-    return job.to_dict()
-
-
-@router.get("/api/v1/jobs/{job_id}/stream")
-async def stream_job_events(job_id: str):
-    """SSE streaming endpoint for real-time progress events."""
-    job = job_manager.get_job(job_id)
-    if not job:
-        raise HTTPException(404, f"Job '{job_id}' not found")
-
-    async def event_generator():
-        q: asyncio.Queue = asyncio.Queue()
-        job.subscribers.append(q)
-        try:
-            init_data = {
-                "event": "init",
-                "job_id": job.job_id,
-                "status": job.status.value,
-                "progress_percent": job.progress_percent,
-                "step": job.current_step,
-            }
-            yield f"data: {json.dumps(init_data)}\n\n"
-            while True:
-                try:
-                    event = await asyncio.wait_for(q.get(), timeout=12.0)
-                    yield f"data: {json.dumps(event)}\n\n"
-                    if event.get("event") in ("completed", "failed"):
-                        break
-                except asyncio.TimeoutError:
-                    yield ": ping\n\n"
-                    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
-                        break
-        finally:
-            if q in job.subscribers:
-                job.subscribers.remove(q)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-# ------------------------------------------------------------------------------
-# 3. Endpoint: /dtm/query (Real-Time Sub-Pixel Ground Elevation Sampling)
-# ------------------------------------------------------------------------------
-@router.post("/api/v1/alignment-studio/dtm/query")
-def query_dtm_surface(request: DTMQueryRequest):
-    """
-    Sub-pixel bilinear DTM surface elevation query (< 30ms).
-    Accepts:
-    1. coordinates: [[lon, lat], ...] from KML polyline dragging.
-    2. stations: [{chainage_m, easting_m, northing_m}] in metric UTM.
-    """
-    try:
-        raw_stations = [s.model_dump() for s in request.stations] if request.stations else None
-        result = dtm_manager.sample_surface_query(
-            project_id=request.project_id,
-            stations=raw_stations,
-            coordinates=request.coordinates,
-        )
-        return result
+        return res
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     except Exception as exc:
-        logger.exception("Error sampling DTM surface: %s", exc)
-        raise HTTPException(500, f"Error sampling surface elevations: {exc}") from exc
-
-
-# ------------------------------------------------------------------------------
-# 4. Endpoints: /survey/generate-centerline (CSV / Excel Centerline Extraction)
-# ------------------------------------------------------------------------------
-@router.post("/api/v1/alignment-studio/survey/generate-centerline")
-async def generate_centerline_from_upload(
-    file: UploadFile = File(...),
-    start_chainage_m: float = Form(0.0),
-    chainage_interval_m: float = Form(20.0),
-    epsg: Optional[int] = Form(None),
-    reverse_direction: bool = Form(False),
-    track_index: int = Form(0),
-):
-    """Generate alignment centerline polyline directly from an uploaded survey file (CSV/Excel)."""
-    orig_name = file.filename or "survey.csv"
-    suffix = Path(orig_name).suffix.lower()
-    if suffix not in (".csv", ".xlsx", ".xls"):
-        raise HTTPException(400, f"Unsupported format '{suffix}'. Supported: .csv, .xlsx, .xls")
-
-    data = await file.read()
-    await file.close()
-
-    reader = BrownfieldSurveyReader(CONFIG)
-    try:
-        buffer = io.BytesIO(data)
-        buffer.name = orig_name
-        res = reader.extract_centerline_from_survey(
-            survey_source=buffer,
-            start_chainage_m=start_chainage_m,
-            chainage_interval_m=chainage_interval_m,
-            epsg=epsg,
-            reverse_direction=reverse_direction,
-            track_index=track_index,
-        )
-        return res
-    except SurveyReaderError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Failed to generate centerline from survey upload: %s", exc)
-        raise HTTPException(500, f"Error generating centerline from survey: {exc}") from exc
-
-
-@router.post("/api/v1/alignment-studio/survey/generate-centerline-path")
-def generate_centerline_from_path(request: GenerateCenterlinePathRequest):
-    """Generate alignment centerline polyline from a local survey file path."""
-    target_path = Path(request.file_path)
-    if not target_path.exists():
-        raise HTTPException(404, f"Survey file not found at: {request.file_path}")
-
-    suffix = target_path.suffix.lower()
-    if suffix not in (".csv", ".xlsx", ".xls"):
-        raise HTTPException(400, f"Unsupported format '{suffix}'. Supported: .csv, .xlsx, .xls")
-
-    reader = BrownfieldSurveyReader(CONFIG)
-    try:
-        res = reader.extract_centerline_from_survey(
-            survey_source=target_path,
-            start_chainage_m=request.start_chainage_m,
-            chainage_interval_m=request.chainage_interval_m,
-            epsg=request.epsg,
-            reverse_direction=request.reverse_direction,
-            track_index=request.track_index,
-        )
-        return res
-    except SurveyReaderError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Failed to generate centerline from survey: %s", exc)
-        raise HTTPException(500, f"Error generating centerline from survey: {exc}") from exc
+        logger.exception("Error processing alignment detection: %s", exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Alignment detection failed: {exc}")

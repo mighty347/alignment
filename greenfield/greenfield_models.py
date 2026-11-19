@@ -30,20 +30,17 @@ class GreenfieldCompositeGenerateRequest(BaseModel):
     """Request payload to generate Greenfield Composite Plan & L-Section sheets from DB."""
 
     model_config = ConfigDict(
+        extra="ignore",
         json_schema_extra={
             "example": {
                 "version_id": "20d5f3c0-1111-4222-8333-444455556666",
                 "track_type": "single",
                 "chainage_interval_m": 20.0,
-                "plan_scale": 5000.0,
-                "profile_h_scale": 5000.0,
-                "profile_v_scale": 500.0,
-                "max_sheet_length_m": 5000.0,
                 "generate_complete_profile": False,
                 "generate_sheet_drawings": True,
                 "export_pdf": False,
             }
-        }
+        },
     )
 
     version_id: str = Field(..., description="UUID of lsection_versions row to generate")
@@ -53,10 +50,6 @@ class GreenfieldCompositeGenerateRequest(BaseModel):
     chainage_interval_m: Optional[float] = Field(None, ge=5.0, le=100.0)
     start_chainage_m: Optional[float] = Field(None)
     end_chainage_m: Optional[float] = Field(None)
-    plan_scale: Optional[float] = Field(None, ge=500.0, le=20000.0)
-    profile_h_scale: Optional[float] = Field(None, ge=1000.0, le=20000.0)
-    profile_v_scale: Optional[float] = Field(None, ge=100.0, le=2000.0)
-    max_sheet_length_m: Optional[float] = Field(None, ge=0.0, le=100000.0)
     generate_complete_profile: bool = Field(False)
     generate_sheet_drawings: bool = Field(True)
     export_pdf: bool = Field(False)

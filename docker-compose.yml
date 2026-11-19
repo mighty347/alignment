@@ -7,13 +7,8 @@ services:
     ports:
       - "8001:8001"
     restart: always
-    environment:
-      - PORT=8001
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/esp_db}
-      - AWS_REGION=${AWS_REGION:-ap-south-1}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
-      - ESP_CORS_ORIGINS=http://localhost:4200,http://127.0.0.1:4200,https://bridge-gad-dev.aagento.ai,https://gad-engine.web.app
+    env_file:
+      - .env
     volumes:
       - ./storage:/app/storage
       - ./greenfield/outputs:/app/greenfield/outputs

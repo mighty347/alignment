@@ -30,6 +30,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Generator, Optional
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import numpy as np
 import pandas as pd
@@ -546,6 +547,16 @@ class GreenfieldDBRepository:
         timeout_s = int(self._db_cfg.get("connect_timeout_s", 10))
 
         if dsn:
+            try:
+                parsed = urlparse(dsn)
+                if parsed.query:
+                    q = parse_qs(parsed.query)
+                    if "schema" in q:
+                        q.pop("schema", None)
+                        clean_query = urlencode(q, doseq=True)
+                        dsn = urlunparse(parsed._replace(query=clean_query))
+            except Exception:
+                pass
             conn = psycopg2.connect(dsn, connect_timeout=timeout_s)
         else:
             pg = self._db_cfg.get("postgres", {})

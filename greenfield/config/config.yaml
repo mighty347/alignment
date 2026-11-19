@@ -420,7 +420,7 @@ drawing:
                                         #          '{ch:.0f}m'       (e.g. 1200m)
     show_chainage_labels: true         # true -> render chainage text labels beside ticks in Plan View
     show_alignment_centerline: true    # true -> render official red track centerline (tangents, spirals, true arcs)
-    show_topo_layer: true              # render topographic survey layers (roads, rivers, boundaries, buildings)
+    show_topo_layer: false              # render topographic survey layers (roads, rivers, boundaries, buildings)
     max_topo_offset_m: 5000.0          # max lateral distance left & right of track (for external topo maps)
                                        # NOTE: in kml_only_mode this filter is DISABLED; all KML features are drawn
     min_topo_boundary_length_m: 1.0    # 1m minimum boundary length (for external topo maps only)

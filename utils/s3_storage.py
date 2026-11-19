@@ -43,6 +43,7 @@ class S3StorageManager:
         aws_secret_access_key: Optional[str] = None,
         aws_session_token: Optional[str] = None,
         download_timeout_s: int = 300,
+        s3_url_base: Optional[str] = None,
     ) -> None:
         self.region_name = (
             region_name
@@ -54,6 +55,11 @@ class S3StorageManager:
         self.aws_secret_access_key = aws_secret_access_key or os.environ.get("AWS_SECRET_ACCESS_KEY")
         self.aws_session_token = aws_session_token or os.environ.get("AWS_SESSION_TOKEN")
         self.download_timeout_s = download_timeout_s
+        self.s3_url_base = (
+            s3_url_base
+            or os.environ.get("AWS_S3_URL")
+            or ""
+        ).rstrip("/")
         self._s3_client = None
 
     def _get_s3_client(self):
@@ -150,28 +156,63 @@ class S3StorageManager:
                 shutil.copy2(local_p, dest_path)
             return dest_path
 
-    def upload_file(self, local_path: Path, bucket: str, key: str) -> str:
+    def get_public_url(self, bucket: str, key: str) -> str:
+        """Format the accessible HTTPS URL for an S3 object."""
+        clean_key = key.lstrip("/")
+        if self.s3_url_base:
+            return f"{self.s3_url_base}/{clean_key}"
+        return f"https://{bucket}.s3.{self.region_name}.amazonaws.com/{clean_key}"
+
+    def upload_file(
+        self,
+        local_path: Path,
+        bucket: str,
+        key: str,
+        content_type: Optional[str] = None,
+        as_s3_uri: bool = False,
+    ) -> str:
         """
         Upload a single local file to an S3 bucket.
         
         Returns:
-            s3://bucket/key URI
+            Accessible HTTPS URL (or s3:// URI if as_s3_uri=True)
         """
         if not local_path.exists():
             raise FileNotFoundError(f"Local file to upload not found: {local_path}")
         s3 = self._get_s3_client()
         logger.info("Uploading %s to s3://%s/%s...", local_path.name, bucket, key)
-        s3.upload_file(str(local_path), bucket, key)
-        s3_uri = f"s3://{bucket}/{key}"
-        logger.info("Upload complete: %s", s3_uri)
-        return s3_uri
+
+        extra_args: dict[str, Any] = {}
+        if content_type:
+            extra_args["ContentType"] = content_type
+        elif local_path.suffix.lower() == ".dxf":
+            extra_args["ContentType"] = "application/dxf"
+        elif local_path.suffix.lower() == ".pdf":
+            extra_args["ContentType"] = "application/pdf"
+        elif local_path.suffix.lower() in (".kml", ".xml"):
+            extra_args["ContentType"] = "application/vnd.google-earth.kml+xml"
+
+        upload_kwargs: dict[str, Any] = {}
+        if extra_args:
+            upload_kwargs["ExtraArgs"] = extra_args
+
+        s3.upload_file(str(local_path), bucket, key, **upload_kwargs)
+
+        if as_s3_uri:
+            s3_uri = f"s3://{bucket}/{key}"
+            logger.info("Upload complete (S3 URI): %s", s3_uri)
+            return s3_uri
+
+        public_url = self.get_public_url(bucket, key)
+        logger.info("Upload complete (HTTPS URL): %s", public_url)
+        return public_url
 
     def upload_directory(self, local_dir: Path, bucket: str, prefix: str) -> dict[str, str]:
         """
         Recursively upload all files in local_dir to s3://bucket/prefix/
         
         Returns:
-            Dict mapping filename to uploaded s3:// URI
+            Dict mapping filename to uploaded HTTPS URL
         """
         if not local_dir.exists():
             raise FileNotFoundError(f"Directory to upload not found: {local_dir}")
@@ -183,7 +224,7 @@ class S3StorageManager:
                 file_path = Path(root) / file
                 rel_path = file_path.relative_to(local_dir).as_posix()
                 s3_key = f"{clean_prefix}/{rel_path}" if clean_prefix else rel_path
-                s3_uri = self.upload_file(file_path, bucket, s3_key)
-                uploaded_map[file_path.name] = s3_uri
+                url = self.upload_file(file_path, bucket, s3_key)
+                uploaded_map[file_path.name] = url
 
         return uploaded_map

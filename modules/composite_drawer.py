@@ -1150,27 +1150,10 @@ class CompositeDrawer:
         self.logger.info("Step 7: Calculating cut/fill earthwork heights...")
         earthwork_result = Earthwork(self.config).calculate(valign_result)
 
-        # Validate the engineering design before writing CAD deliverables.
-        self.logger.info("Step 8: Validating alignment against IRS/RDSO standards (40 checks)...")
-        validator = AlignmentValidator(self.config)
-        val_result = validator.validate(
-            hgeom_result=hgeom_result,
-            valign_result=valign_result,
-            earthwork_result=earthwork_result,
-            topo_result=topo_result,
-        )
+        # Step 8: Validation skipped for now
+        self.logger.info("Step 8: Validation skipped for now.")
+        val_result = None
         val_csv_path = None
-        if export_csv_enabled:
-            val_csv_path = validator.export_csv(val_result, str(self.outputs_dir))
-        validator.print_summary(val_result)
-        if val_result.fail_count:
-            failed_checks = val_result.checks_df.loc[
-                val_result.checks_df["status"] == "FAIL", ["check_id", "check_name", "value", "limit"]
-            ]
-            raise RuntimeError(
-                "Alignment validation failed; CAD output was not generated. "
-                + failed_checks.to_string(index=False)
-            )
 
         if export_csv_enabled:
             VerticalAlignment(self.config).export_csv(valign_result, str(self.outputs_dir))

@@ -81,8 +81,8 @@ def _create_storage_manager(cfg: dict[str, Any]) -> S3StorageManager:
     )
 
 
-def _create_composite_drawer(cfg: dict[str, Any]) -> CompositeDrawer:
-    return CompositeDrawer(cfg)
+def _create_composite_drawer(cfg: dict[str, Any], template: Optional[Any] = None) -> CompositeDrawer:
+    return CompositeDrawer(cfg, template=template)
 
 
 # ---------------------------------------------------------------------------
@@ -532,8 +532,59 @@ def _execute_greenfield_composite_job(
             topo_path=topo_local,
         )
 
+        # Resolve dynamic L-Section sheet layout template
+        active_template = payload.template
+        if not active_template:
+            tpl_id = payload.template_id
+            try:
+                with repo._connect() as conn:
+                    with conn.cursor() as cur:
+                        if tpl_id:
+                            cur.execute(
+                                """
+                                SELECT id, name, corridor_type, paper, sheet_width_mm, sheet_height_mm,
+                                       sidebar_width_mm, plan_viewport, profile_viewport, data_bands, sidebar, is_public, is_default
+                                FROM public.lsection_sheet_templates
+                                WHERE id = %s
+                                LIMIT 1;
+                                """,
+                                (tpl_id,),
+                            )
+                        else:
+                            cur.execute(
+                                """
+                                SELECT id, name, corridor_type, paper, sheet_width_mm, sheet_height_mm,
+                                       sidebar_width_mm, plan_viewport, profile_viewport, data_bands, sidebar, is_public, is_default
+                                FROM public.lsection_sheet_templates
+                                WHERE is_default = TRUE
+                                ORDER BY updated_at DESC
+                                LIMIT 1;
+                                """
+                            )
+                        row = cur.fetchone()
+                        if row:
+                            from template_models import LSectionSheetTemplate
+                            active_template = LSectionSheetTemplate(
+                                id=row[0],
+                                name=row[1],
+                                corridorType=row[2],
+                                paper=row[3],
+                                sheetWidthMm=float(row[4]),
+                                sheetHeightMm=float(row[5]),
+                                sidebarWidthMm=float(row[6]),
+                                planViewport=row[7],
+                                profileViewport=row[8],
+                                dataBands=row[9],
+                                sidebar=row[10],
+                                isPublic=bool(row[11]),
+                                isDefault=bool(row[12]),
+                            )
+                            logger.info("Using LSectionSheetTemplate '%s' (%s) for job %s", active_template.id, active_template.name, job_id)
+            except Exception as tpl_ex:
+                logger.warning("Failed to fetch template '%s': %s", tpl_id, tpl_ex)
+
         job_manager.emit_event(job_id, "status", {"progress_percent": 55})
-        drawer = _create_composite_drawer(session_cfg)
+        drawer = _create_composite_drawer(session_cfg, template=active_template)
         output_prefix = payload.output_prefix or f"greenfield_{payload.version_id[:8]}_composite"
         res_dict = drawer.generate_from_inputs(output_prefix=output_prefix)
         comp_res = res_dict.get("composite_result")

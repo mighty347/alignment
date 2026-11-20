@@ -60,6 +60,14 @@ from modules.lsection_drawer import LSectionDrawer, LSectionResult
 from modules.esp_drawer import ESPDrawer
 from utils.logger import get_logger
 
+try:
+    from template_models import LSectionSheetTemplate
+except ImportError:
+    try:
+        from alignment.template_models import LSectionSheetTemplate
+    except ImportError:
+        LSectionSheetTemplate = None
+
 logger = get_logger("CompositeDrawer")
 
 
@@ -96,10 +104,24 @@ class CompositeDrawer:
     COL_BLACK = 7
     COL_PINK = 221
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], template: Optional[Any] = None) -> None:
         self.config = config
         self.logger = get_logger(self.__class__.__name__)
         self.logger.info("Initialized %s", self.__class__.__name__)
+
+        # Resolve LSectionSheetTemplate
+        self.template: Optional[Any] = None
+        raw_tpl = template or config.get("template") or config.get("lsection_template")
+        if raw_tpl is not None:
+            if LSectionSheetTemplate is not None and isinstance(raw_tpl, LSectionSheetTemplate):
+                self.template = raw_tpl
+            elif LSectionSheetTemplate is not None and isinstance(raw_tpl, dict):
+                try:
+                    self.template = LSectionSheetTemplate.model_validate(raw_tpl)
+                except Exception as tpl_err:
+                    self.logger.warning("Failed to validate LSectionSheetTemplate: %s", tpl_err)
+            else:
+                self.template = raw_tpl
 
         paths_cfg = config.get("paths", {})
         self.outputs_dir = Path(paths_cfg.get("outputs_dir", "outputs"))
@@ -107,14 +129,23 @@ class CompositeDrawer:
         self.comp_dir.mkdir(parents=True, exist_ok=True)
 
         drawing_cfg = config.get("drawing", {})
-        self.max_sheet_length_m: float = float(drawing_cfg.get("max_lsection_length_m", 5000.0))
         self.generate_complete_profile: bool = bool(drawing_cfg.get("generate_complete_profile", True))
         self.generate_sheet_drawings: bool = bool(drawing_cfg.get("generate_sheet_drawings", True))
         self.export_pdf: bool = bool(drawing_cfg.get("export_pdf", True))
         self.pdf_dpi: int = int(drawing_cfg.get("pdf_dpi", 150))
-        self.h_scale: float = float(drawing_cfg.get("profile_h_scale", 5000.0))
-        self.v_scale: float = float(drawing_cfg.get("profile_v_scale", 500.0))
-        self.plan_scale: float = float(drawing_cfg.get("plan_scale", 5000.0))
+
+        if self.template:
+            self.h_scale: float = float(self.template.profile_viewport.h_scale)
+            self.v_scale: float = float(self.template.profile_viewport.v_scale)
+            self.plan_scale: float = float(self.template.plan_viewport.scale)
+            tpl_max_len = self.template.get_available_drawing_length_m()
+            self.max_sheet_length_m: float = float(drawing_cfg.get("max_lsection_length_m", tpl_max_len))
+            self.config["template"] = self.template
+        else:
+            self.h_scale: float = float(drawing_cfg.get("profile_h_scale", 5000.0))
+            self.v_scale: float = float(drawing_cfg.get("profile_v_scale", 500.0))
+            self.plan_scale: float = float(drawing_cfg.get("plan_scale", 5000.0))
+            self.max_sheet_length_m: float = float(drawing_cfg.get("max_lsection_length_m", 5000.0))
 
         # Specialized sub-drawers
         self.plan_drawer = PlanDrawer(self.config)
@@ -471,37 +502,61 @@ class CompositeDrawer:
                 doc, msp = self._setup_composite_document()
 
                 draw_length_m = max(1.0, float(ch_c[-1] - ch_c[0])) if len(ch_c) > 0 else 5000.0
-                sheet_height = float(self.config.get("drawing", {}).get("sheet_height_mm", 915.0))
-                sidebar_width = float(self.config.get("drawing", {}).get("sidebar_width_mm", 153.0))
                 label_width = 80.0
                 margin_sheet = 10.0
-                origin_x = margin_sheet + label_width + 10.0  # 100.0 mm
-
-                if self.h_scale > 0 and draw_length_m > 0:
-                    draw_len_mm = (draw_length_m / self.h_scale) * 1000.0
-                else:
-                    draw_len_mm = 1000.0
-
                 sidebar_gap = 10.0
-                sidebar_x0 = origin_x + draw_len_mm + sidebar_gap
-                sidebar_x1 = sidebar_x0 + sidebar_width
-                sheet_width = sidebar_x1 + margin_sheet
-
-                num_data_rows = 10
                 row_height = float(self.config.get("drawing", {}).get("row_height_mm", 18.0))
-                data_band_h = num_data_rows * row_height        # 180.0 mm
-                profile_area_h = 120.0                          # 120.0 mm
                 margin_bot = 12.0
                 margin_mid = float(self.config.get("drawing", {}).get("margin_mid_mm", 55.0))
                 margin_top = 10.0
 
-                data_origin_y = margin_bot + data_band_h        # 192.0 mm
-                profile_origin_y = data_origin_y                # 192.0 mm
-                profile_top_y = profile_origin_y + profile_area_h  # 310.0 mm
-                plan_bot_y = profile_top_y + margin_mid        # 325.0 mm
-                plan_top_y = sheet_height - margin_top          # 825.0 mm
-                plan_area_h = plan_top_y - plan_bot_y           # 500.0 mm
-                plan_origin_y = (plan_bot_y + plan_top_y) / 2.0  # 575.0 mm
+                if self.template:
+                    sheet_width = float(self.template.sheet_width_mm)
+                    sheet_height = float(self.template.sheet_height_mm)
+                    sidebar_width = float(self.template.sidebar_width_mm)
+                    pv = self.template.profile_viewport
+                    plv = self.template.plan_viewport
+
+                    origin_x = pv.x
+                    sidebar_x0 = sheet_width - sidebar_width - margin_sheet
+                    sidebar_x1 = sheet_width - margin_sheet
+                    draw_len_mm = max(100.0, sidebar_x0 - sidebar_gap - origin_x)
+
+                    num_data_rows = len(self.template.get_enabled_bands()) if self.template.data_bands else 10
+                    data_band_h = self.template.calculate_total_bands_height_mm() if self.template.data_bands else (num_data_rows * row_height)
+                    data_origin_y = margin_bot + data_band_h
+                    profile_origin_y = data_origin_y
+                    profile_top_y = profile_origin_y + pv.h
+
+                    plan_bot_y = profile_top_y + margin_mid
+                    plan_top_y = sheet_height - margin_top
+                    plan_area_h = plan_top_y - plan_bot_y
+                    plan_origin_y = (plan_bot_y + plan_top_y) / 2.0
+                else:
+                    sheet_height = float(self.config.get("drawing", {}).get("sheet_height_mm", 915.0))
+                    sidebar_width = float(self.config.get("drawing", {}).get("sidebar_width_mm", 153.0))
+                    origin_x = margin_sheet + label_width + 10.0  # 100.0 mm
+
+                    if self.h_scale > 0 and draw_length_m > 0:
+                        draw_len_mm = (draw_length_m / self.h_scale) * 1000.0
+                    else:
+                        draw_len_mm = 1000.0
+
+                    sidebar_x0 = origin_x + draw_len_mm + sidebar_gap
+                    sidebar_x1 = sidebar_x0 + sidebar_width
+                    sheet_width = sidebar_x1 + margin_sheet
+
+                    num_data_rows = 10
+                    data_band_h = num_data_rows * row_height        # 180.0 mm
+                    profile_area_h = 120.0                          # 120.0 mm
+
+                    data_origin_y = margin_bot + data_band_h        # 192.0 mm
+                    profile_origin_y = data_origin_y                # 192.0 mm
+                    profile_top_y = profile_origin_y + profile_area_h  # 310.0 mm
+                    plan_bot_y = profile_top_y + margin_mid        # 325.0 mm
+                    plan_top_y = sheet_height - margin_top          # 825.0 mm
+                    plan_area_h = plan_top_y - plan_bot_y           # 500.0 mm
+                    plan_origin_y = (plan_bot_y + plan_top_y) / 2.0  # 575.0 mm
 
                 doc.header["$LIMMIN"] = (0.0, 0.0)
                 doc.header["$LIMMAX"] = (sheet_width, sheet_height)
@@ -521,7 +576,10 @@ class CompositeDrawer:
                 # Datum Calculation
                 valid_egl = [e for e in egl_c if e != 0.0]
                 start_egl = float(valid_egl[0]) if valid_egl else 0.0
-                datum_elev = math.floor((start_egl - 20.0) / 5.0) * 5.0
+                if self.template:
+                    datum_elev = self.template.calculate_datum_elevation(start_egl)
+                else:
+                    datum_elev = math.floor((start_egl - 20.0) / 5.0) * 5.0
 
                 # ── 1. Render Bottom L-Section Profile & 10 Data Bands via LSectionDrawer ──
                 self.lsection_drawer.draw_profile_and_bands_onto_composite_sheet(
@@ -877,20 +935,34 @@ class CompositeDrawer:
         # VC criteria
         vc_crit = str(notes_cfg.get("vc_threshold_text", "4MM PER METER OR 0.4PERCENT")).strip()
 
-        # Build list of 11 notes
-        notes_list: list[tuple[int, str]] = [
-            (1, "PROPOSED WORK SHOWN IN RED."),
-            (2, "ALL DIMENSIONS SHOWN IN METER, UNLESS OTHER WISE SPECIFIED."),
-            (3, f"RULING GRADIENT OF THE SECTION HAS BEEN KEPT AS {ruling_disp}."),
-            (4, "ALL THE CURVE IN DIAGRAM HAS BEEN SHOWN BY INCORPORATING GRADE COMPENSATION."),
-            (5, f"THIS DRAWING IS BASED ON SCALE AS PER IR ENGG. CODE 1982 CORRECTED UP TO {ir_date}."),
-            (6, f"ALL CHAINAGE TAKEN FROM {stn} CONSIDERING {stn} STATION BUILDING CH:{stn_ch:.1f}."),
-            (7, f"PROPOSED TRACK IS FIT FOR {spd} KMPH SPEED."),
-            (8, f"TRL OF ALL THE PROPOSED CURVE HAS BEEN DESIGN FOR {spd}KMPH."),
-            (9, "IT IS CERTIFIED THAT THE BED LEVEL OF PROPOSED LHS/RUB LIES ABOVE THE OBSERVED WATER LEVEL OF SITE."),
-            (10, "NO PSR WILL BE IMPOSED IN THE SECTION ON ACCOUNT OF PROPOSED WORK ."),
-            (11, f"VERTICAL CURVE HAS BEEN PROVIDED WHERE ALGEBRIC DIFFERENCE BETWEEN THE GRADES GREATER THAN {vc_crit}."),
-        ]
+        # Build list of notes (Use template clauses if configured, else default RDSO list)
+        tpl_clauses = None
+        if self.template and getattr(self.template, "sidebar", None):
+            sb = self.template.sidebar
+            if getattr(sb, "notes", None) and getattr(sb.notes, "clauses", None):
+                tpl_clauses = sb.notes.clauses
+
+        if tpl_clauses:
+            notes_list: list[tuple[int, str]] = []
+            import re
+            for idx, clause in enumerate(tpl_clauses, start=1):
+                clean_clause = str(clause).strip()
+                clean_clause = re.sub(r"^\d+\.\s*", "", clean_clause)
+                notes_list.append((idx, clean_clause))
+        else:
+            notes_list: list[tuple[int, str]] = [
+                (1, "PROPOSED WORK SHOWN IN RED."),
+                (2, "ALL DIMENSIONS SHOWN IN METER, UNLESS OTHER WISE SPECIFIED."),
+                (3, f"RULING GRADIENT OF THE SECTION HAS BEEN KEPT AS {ruling_disp}."),
+                (4, "ALL THE CURVE IN DIAGRAM HAS BEEN SHOWN BY INCORPORATING GRADE COMPENSATION."),
+                (5, f"THIS DRAWING IS BASED ON SCALE AS PER IR ENGG. CODE 1982 CORRECTED UP TO {ir_date}."),
+                (6, f"ALL CHAINAGE TAKEN FROM {stn} CONSIDERING {stn} STATION BUILDING CH:{stn_ch:.1f}."),
+                (7, f"PROPOSED TRACK IS FIT FOR {spd} KMPH SPEED."),
+                (8, f"TRL OF ALL THE PROPOSED CURVE HAS BEEN DESIGN FOR {spd}KMPH."),
+                (9, "IT IS CERTIFIED THAT THE BED LEVEL OF PROPOSED LHS/RUB LIES ABOVE THE OBSERVED WATER LEVEL OF SITE."),
+                (10, "NO PSR WILL BE IMPOSED IN THE SECTION ON ACCOUNT OF PROPOSED WORK ."),
+                (11, f"VERTICAL CURVE HAS BEEN PROVIDED WHERE ALGEBRIC DIFFERENCE BETWEEN THE GRADES GREATER THAN {vc_crit}."),
+            ]
 
         wrap_width = 68  # Characters before wrapping to fit ~138mm printable width
 
@@ -982,15 +1054,30 @@ class CompositeDrawer:
             dxfattribs={"layer": "TITLE_BLOCK", "color": self.COL_BLACK, "lineweight": 18},
         )
 
-        zonal_name = str(self.config.get("project", {}).get("zone", "SOUTH CENTRAL RAILWAY")).upper()
+        tpl_tb = None
+        if self.template and getattr(self.template, "sidebar", None):
+            tpl_tb = getattr(self.template.sidebar, "title_block", None)
+
+        zonal_name = str(
+            getattr(tpl_tb, "zonal_railway", None)
+            or self.config.get("project", {}).get("zone", "SOUTH CENTRAL RAILWAY")
+        ).upper()
         msp.add_text(
             f"INDIAN RAILWAYS — {zonal_name}",
             dxfattribs={"height": 3.4, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": self.COL_RED},
         ).set_placement(((bx0 + bx1) / 2.0, (tb_top_y + banner_div_y) / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
 
-        proj_name = str(self.config.get("project", {}).get("name", "NEW BROAD GAUGE RAILWAY LINE")).upper()
+        proj_name = str(
+            getattr(tpl_tb, "project_name", None)
+            or self.config.get("project", {}).get("name", "NEW BROAD GAUGE RAILWAY LINE")
+        ).upper()
+        div_name = str(
+            getattr(tpl_tb, "division", None)
+            or self.config.get("project", {}).get("division", "HEADQUARTERS")
+        ).upper()
         plan_title = str(
-            self.config.get("templates", {})
+            getattr(tpl_tb, "drawing_title", None)
+            or self.config.get("templates", {})
             .get("greenfield", {})
             .get("title_block", {})
             .get("plan_title", "WORKING PLAN AND LONGITUDINAL SECTION")
@@ -998,6 +1085,7 @@ class CompositeDrawer:
 
         tb_items = [
             f"PROJECT  : {proj_name}",
+            f"DIVISION : {div_name}",
             f"TITLE    : {plan_title}",
             f"SHEET NO : {sheet_index} OF {total_sheets} (KM {start_ch/1000.0:.2f} TO KM {end_ch/1000.0:.2f})",
             f"SCALES   : PLAN 1:{int(self.plan_scale)} | PROF H:1:{int(self.h_scale)}, V:1:{int(self.v_scale)}",

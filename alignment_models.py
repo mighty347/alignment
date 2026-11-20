@@ -84,3 +84,18 @@ class JobRecord:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
+# ============================================================================
+# L-Section Dynamic Sheet Layout Template Models (RDSO CAD Standards)
+# ============================================================================
+from template_models import (
+    PlanViewportConfig,
+    ProfileViewportConfig,
+    DataBandItem,
+    SidebarNotes,
+    SidebarRect,
+    SidebarTitleBlock,
+    SidebarConfig,
+    LSectionSheetTemplate,
+)

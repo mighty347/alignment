@@ -141,6 +141,19 @@ class ESPDrawer:
 
         self.row_height: float = 18.0    # mm — height of each data row
 
+        # Resolve dynamic template if provided
+        self.template = None
+        raw_tpl = config.get("template") or config.get("lsection_template")
+        if raw_tpl is not None:
+            if hasattr(raw_tpl, "data_bands"):
+                self.template = raw_tpl
+            elif isinstance(raw_tpl, dict):
+                try:
+                    from template_models import LSectionSheetTemplate
+                    self.template = LSectionSheetTemplate.model_validate(raw_tpl)
+                except Exception:
+                    pass
+
         # Track buildup constant (config or IR standard 762mm)
         vert_cfg = config.get("vertical", {})
         self.track_buildup_m: float = float(
@@ -1410,14 +1423,22 @@ class ESPDrawer:
         num_rows: int,
         label_width: float,
         row_colors: Optional[list[int]] = None,
+        row_heights: Optional[list[float]] = None,
     ) -> None:
         """Draw outer border and horizontal dividers of the full data table matching Image 2."""
-        total_h = num_rows * self.row_height
+        if row_heights and len(row_heights) == num_rows:
+            cum_offsets = [0.0]
+            for h in row_heights:
+                cum_offsets.append(cum_offsets[-1] + float(h))
+            y_dividers = [origin_y - off for off in cum_offsets]
+        else:
+            y_dividers = [origin_y - i * self.row_height for i in range(num_rows + 1)]
+
         label_start_x = origin_x - label_width
 
         # Horizontal dividers
         for i in range(num_rows + 1):
-            y = origin_y - i * self.row_height
+            y = y_dividers[i]
             if row_colors and i < len(row_colors):
                 color = row_colors[i]
             elif row_colors and i == len(row_colors):
@@ -1437,8 +1458,8 @@ class ESPDrawer:
 
         # Vertical borders: left edge, label|data divider, right edge
         for r in range(num_rows):
-            y_top = origin_y - r * self.row_height
-            y_bot = origin_y - (r + 1) * self.row_height
+            y_top = y_dividers[r]
+            y_bot = y_dividers[r + 1]
             color = row_colors[r] if (row_colors and r < len(row_colors)) else (self.COL_RED if r < 6 else self.COL_BLACK)
             for x in (label_start_x, origin_x, origin_x + draw_length_mm):
                 msp.add_line(
@@ -1457,11 +1478,23 @@ class ESPDrawer:
         origin_y: float,
         labels: list[tuple[str, int]],
         label_width: float,
+        row_heights: Optional[list[float]] = None,
     ) -> None:
         """Draw row label text in the left label column with auto-wrapping."""
         label_cx = origin_x - label_width / 2.0
+        if row_heights and len(row_heights) == len(labels):
+            cum_offsets = [0.0]
+            for h in row_heights:
+                cum_offsets.append(cum_offsets[-1] + float(h))
+            y_dividers = [origin_y - off for off in cum_offsets]
+        else:
+            y_dividers = [origin_y - i * self.row_height for i in range(len(labels) + 1)]
+
         for i, (label, color) in enumerate(labels):
-            cy = origin_y - i * self.row_height - self.row_height / 2.0
+            y_top = y_dividers[i]
+            y_bot = y_dividers[i + 1]
+            cy = (y_top + y_bot) / 2.0
+            rh = (y_top - y_bot)
             
             # Wrap long strings to fit neatly in label column
             if len(label) > 28:
@@ -1482,7 +1515,7 @@ class ESPDrawer:
                     lines.append(" ".join(curr))
 
                 n_lines = len(lines)
-                line_spacing = min(2.4, (self.row_height - 2.0) / max(1, n_lines))
+                line_spacing = min(2.4, (rh - 2.0) / max(1, n_lines))
                 start_y = cy + (n_lines - 1) * line_spacing / 2.0
 
                 for l_idx, l_text in enumerate(lines):
@@ -2228,27 +2261,80 @@ class ESPDrawer:
         ]
 
         active_bands = [b for b in candidate_bands if b["available"]]
+
+        # ── Map dynamic data bands from template if present ──
+        if self.template and getattr(self.template, "data_bands", None):
+            key_to_id = {
+                "vgeom": "vgeom",
+                "gradient": "vgeom",
+                "vertical_geometry": "vgeom",
+                "gradient_and_vertical_curves": "vgeom",
+                "hgeom": "hgeom",
+                "horizontal_curve": "hgeom",
+                "horizontal_curves": "hgeom",
+                "horizontal_geometry": "hgeom",
+                "cut_fill": "cut_fill",
+                "cutting_filling": "cut_fill",
+                "diff_prl_erl": "diff_prl_erl",
+                "prl": "prl",
+                "proposed_rail_level": "prl",
+                "pfl": "pfl",
+                "proposed_formation_level": "pfl",
+                "formation_level": "pfl",
+                "erl": "erl",
+                "existing_rail_level": "erl",
+                "efl": "efl",
+                "existing_formation_level": "efl",
+                "egl": "egl",
+                "existing_ground_level": "egl",
+                "ground_level": "egl",
+                "chainage": "chainage",
+            }
+            cand_dict = {b["id"]: b for b in candidate_bands}
+            ordered_bands = []
+            for t_band in self.template.data_bands:
+                if not getattr(t_band, "enabled", True):
+                    continue
+                k = getattr(t_band, "key", "").lower().replace("-", "_").replace(" ", "_")
+                mapped_id = key_to_id.get(k, k)
+                if mapped_id in cand_dict:
+                    b_info = dict(cand_dict[mapped_id])
+                    lbl = getattr(t_band, "label", None)
+                    if lbl:
+                        b_info["label"] = lbl
+                    h_mm = getattr(t_band, "height_mm", None)
+                    if h_mm and h_mm > 0:
+                        b_info["height_mm"] = float(h_mm)
+                    if b_info["available"]:
+                        ordered_bands.append(b_info)
+            if ordered_bands:
+                active_bands = ordered_bands
+
         num_rows = len(active_bands)
         if num_rows == 0:
             return
 
-        total_h = num_rows * rh
+        row_heights = [float(b.get("height_mm", rh)) for b in active_bands]
+        cum_offsets = [0.0]
+        for h in row_heights:
+            cum_offsets.append(cum_offsets[-1] + h)
+        total_h = cum_offsets[-1]
 
         # ── Table frame ──────────────────────────────────────────────────────
         row_colors = [b["color"] for b in active_bands]
-        self._draw_table_frame(msp, origin_x, origin_y, draw_length_mm, num_rows, label_width, row_colors=row_colors)
+        self._draw_table_frame(msp, origin_x, origin_y, draw_length_mm, num_rows, label_width, row_colors=row_colors, row_heights=row_heights)
 
         # ── Label column ─────────────────────────────────────────────────────
         labels = [(b["label"], b["color"]) for b in active_bands]
-        self._draw_label_column(msp, origin_x, origin_y, labels, label_width)
+        self._draw_label_column(msp, origin_x, origin_y, labels, label_width, row_heights=row_heights)
 
         # ── 1.0mm Station Ticks at Top & Bottom of Data Rows (skip geometry rows) ──
         tick_h = float(self.config.get("drawing", {}).get("tick_line_length_mm", 1.0))
         for r_idx, band in enumerate(active_bands):
             if band["is_geom"]:
                 continue
-            y_top = origin_y - r_idx * rh
-            y_bot = origin_y - (r_idx + 1) * rh
+            y_top = origin_y - cum_offsets[r_idx]
+            y_bot = origin_y - cum_offsets[r_idx + 1]
             for c in chainages:
                 x = self._ch_to_x(c, origin_x, start_ch=start_ch)
                 msp.add_line((x, y_top), (x, y_top - tick_h), dxfattribs={"layer": "DATA_BORDER", "color": self.COL_BLACK, "lineweight": 13})
@@ -2262,9 +2348,9 @@ class ESPDrawer:
         # ── Render active band contents ──────────────────────────────────────
         for r_idx, band in enumerate(active_bands):
             b_id = band["id"]
-            row_top_y = origin_y - r_idx * rh
-            row_cy = row_top_y - rh / 2.0
-            row_bot_y = origin_y - (r_idx + 1) * rh
+            row_top_y = origin_y - cum_offsets[r_idx]
+            row_bot_y = origin_y - cum_offsets[r_idx + 1]
+            row_cy = (row_top_y + row_bot_y) / 2.0
 
             if b_id == "vgeom":
                 self._draw_vertical_geometry_row(msp, vip_df, origin_x, row_top_y, draw_length_mm=draw_length_mm, start_ch=start_ch)

@@ -434,8 +434,14 @@ class LSectionKafkaService:
             from greenfield.greenfield_models import GreenfieldCompositeGenerateRequest
             from greenfield.greenfield_router import _execute_greenfield_composite_job
 
+            template_id = (
+                payload.get("templateId")
+                or payload.get("template_id")
+            )
+
             req = GreenfieldCompositeGenerateRequest(
                 version_id=str(version_id),
+                template_id=template_id,
                 s3_output_bucket=self.s3_bucket,
                 generate_sheet_drawings=True,
                 export_pdf=False,

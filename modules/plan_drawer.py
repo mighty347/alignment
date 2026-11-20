@@ -6193,41 +6193,47 @@ class PlanDrawer:
         txt_km_right.set_placement((x_right - 1.0, y_header - 5.0), align=TextEntityAlignment.BOTTOM_CENTER)
 
         # ── 4. North Arrow (Compass star with 'N' letter) on Far Right ──
-        x_north = origin_x + draw_len_mm - 20.0
-        y_north = y_header
-        # North arrow star rotated by -theta relative to paper (+Y true north)
-        north_ang_deg = math.degrees(-theta + math.pi / 2.0)
-        rad_n = math.radians(north_ang_deg)
-        cos_n, sin_n = math.cos(rad_n), math.sin(rad_n)
-        ux, uy = cos_n, sin_n       # North unit vector
-        vx, vy = -sin_n, cos_n      # East unit vector
+        show_north = True
+        tpl = self.config.get("template") or self.config.get("lsection_template")
+        if tpl and getattr(tpl, "plan_viewport", None):
+            show_north = getattr(tpl.plan_viewport, "show_north_arrow", True)
 
-        star_len = 8.5
-        star_w = 2.8
-        p_top = (x_north + star_len * ux, y_north + star_len * uy)
-        p_bot = (x_north - star_len * 0.6 * ux, y_north - star_len * 0.6 * uy)
-        p_right = (x_north + star_w * vx, y_north + star_w * vy)
-        p_left = (x_north - star_w * vx, y_north - star_w * vy)
+        if show_north:
+            x_north = origin_x + draw_len_mm - 20.0
+            y_north = y_header
+            # North arrow star rotated by -theta relative to paper (+Y true north)
+            north_ang_deg = math.degrees(-theta + math.pi / 2.0)
+            rad_n = math.radians(north_ang_deg)
+            cos_n, sin_n = math.cos(rad_n), math.sin(rad_n)
+            ux, uy = cos_n, sin_n       # North unit vector
+            vx, vy = -sin_n, cos_n      # East unit vector
 
-        # Compass 4-point star
-        msp.add_lwpolyline(
-            [p_top, p_left, (x_north, y_north), p_right, p_top],
-            dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 25}
-        )
-        msp.add_lwpolyline(
-            [p_bot, p_left, (x_north, y_north), p_right, p_bot],
-            dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 18}
-        )
-        msp.add_line(p_top, p_bot, dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 25})
-        msp.add_line(p_left, p_right, dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 18})
+            star_len = 8.5
+            star_w = 2.8
+            p_top = (x_north + star_len * ux, y_north + star_len * uy)
+            p_bot = (x_north - star_len * 0.6 * ux, y_north - star_len * 0.6 * uy)
+            p_right = (x_north + star_w * vx, y_north + star_w * vy)
+            p_left = (x_north - star_w * vx, y_north - star_w * vy)
 
-        # 'N' letter annotation
-        txt_n_pos = (x_north + (star_len + 3.2) * ux, y_north + (star_len + 3.2) * uy)
-        txt_n = msp.add_text(
-            "N",
-            dxfattribs={"height": 2.8, "layer": "NORTH_ARROW", "style": "ESP_STYLE", "color": self.COL_BLACK}
-        )
-        txt_n.set_placement(txt_n_pos, align=TextEntityAlignment.MIDDLE_CENTER)
+            # Compass 4-point star
+            msp.add_lwpolyline(
+                [p_top, p_left, (x_north, y_north), p_right, p_top],
+                dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 25}
+            )
+            msp.add_lwpolyline(
+                [p_bot, p_left, (x_north, y_north), p_right, p_bot],
+                dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 18}
+            )
+            msp.add_line(p_top, p_bot, dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 25})
+            msp.add_line(p_left, p_right, dxfattribs={"layer": "NORTH_ARROW", "color": self.COL_BLACK, "lineweight": 18})
+
+            # 'N' letter annotation
+            txt_n_pos = (x_north + (star_len + 3.2) * ux, y_north + (star_len + 3.2) * uy)
+            txt_n = msp.add_text(
+                "N",
+                dxfattribs={"height": 2.8, "layer": "NORTH_ARROW", "style": "ESP_STYLE", "color": self.COL_BLACK}
+            )
+            txt_n.set_placement(txt_n_pos, align=TextEntityAlignment.MIDDLE_CENTER)
 
     def _draw_north_arrow_and_scale(self, msp: Any, x: float, y: float, anno_scale: float) -> None:
         """Render North Arrow symbol and graphic scale bar."""

@@ -58,6 +58,8 @@ class GreenfieldCompositeGenerateRequest(BaseModel):
     custom_bands: Optional[list[dict[str, Any]]] = Field(
         None, description="Optional UIBandItem[] override; defaults to lsection_versions.bandHeaders"
     )
+    template_id: Optional[str] = Field(None, description="Optional ID of lsection_sheet_templates row")
+    template: Optional[Any] = Field(None, description="Optional parsed LSectionSheetTemplate or dict")
 
 
 class GreenfieldPreviewResponse(BaseModel):

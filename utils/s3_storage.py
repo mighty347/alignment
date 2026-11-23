@@ -146,7 +146,11 @@ class S3StorageManager:
                 logger.error("HTTP download failed: %s", str(e))
                 raise RuntimeError(f"Failed to download remote file ({source_clean}): {str(e)}") from e
 
-        # 3. Local filesystem fallback
+        # 3. Explicit check for unsupported client-side blob/data schemes
+        elif source_clean.startswith("blob:") or source_clean.startswith("data:"):
+            raise ValueError(f"Client-side URL schemes (blob/data) cannot be downloaded on server: {source_clean}")
+
+        # 4. Local filesystem fallback
         else:
             local_p = Path(source_clean).resolve()
             if not local_p.exists():

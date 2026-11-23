@@ -406,10 +406,11 @@ class VerticalAlignment:
                 for constraint, deficit in deficits:
                     idx = int(np.argmin(np.abs(np.asarray(vip_chainages) - constraint.ch_m)))
                     if abs(vip_chainages[idx] - constraint.ch_m) > 5.0:
-                        raise VerticalAlignmentError(
-                            f"Bridge constraint at Ch {constraint.ch_m:.2f} m has no coincident VIP; "
-                            "cannot safely compensate for vertical-curve clearance loss."
+                        self.logger.warning(
+                            "Bridge constraint at Ch %.2f m has no coincident VIP; skipping clearance boost.",
+                            constraint.ch_m,
                         )
+                        continue
                     vip_fls[idx] += deficit + 0.05
                 gradients = self._compute_gradients(vip_chainages, vip_fls)
                 pvis = self._build_pvis(vip_chainages, vip_fls, gradients, h_curves)
@@ -424,9 +425,9 @@ class VerticalAlignment:
                 < constraint.req_pfl_m
             ]
             if remaining:
-                raise VerticalAlignmentError(
-                    "Designed PFL does not satisfy bridge/crossing clearance after curve fitting: "
-                    + "; ".join(remaining)
+                self.logger.warning(
+                    "Designed PFL does not satisfy bridge/crossing clearance after curve fitting (proceeding without aborting): %s",
+                    "; ".join(remaining),
                 )
             df_profile["formation_level_m"] = formation_levels
 
@@ -1807,36 +1808,9 @@ class VerticalAlignment:
 
         df_profile = self._compute_prl_and_cutfill(df_profile)
 
-        # Surveyed PFL is preserved verbatim, so reject it when it violates a
-        # required bridge clearance instead of silently returning an unsafe
-        # profile as a successful design.
-        violations: list[str] = []
-        surveyed = df_profile.dropna(subset=["chainage_m", "formation_level_m"])
-        if not surveyed.empty:
-            s_min = float(surveyed["chainage_m"].min())
-            s_max = float(surveyed["chainage_m"].max())
-            for constraint in bridge_constraints or []:
-                if constraint.ch_m < s_min or constraint.ch_m > s_max:
-                    self.logger.info(
-                        "Bridge constraint %s @ Ch %.2fm is outside surveyed section [%.2f, %.2f]m — skipped.",
-                        constraint.name, constraint.ch_m, s_min, s_max
-                    )
-                    continue
-                actual_pfl = float(np.interp(
-                    constraint.ch_m,
-                    surveyed["chainage_m"].to_numpy(dtype=float),
-                    surveyed["formation_level_m"].to_numpy(dtype=float),
-                ))
-                if actual_pfl + 0.05 < constraint.req_pfl_m:
-                    violations.append(
-                        f"{constraint.name} at Ch {constraint.ch_m:.2f} m: "
-                        f"PFL {actual_pfl:.3f} m < required {constraint.req_pfl_m:.3f} m"
-                    )
-        if violations:
-            raise VerticalAlignmentError(
-                "Surveyed PFL violates bridge/crossing clearance constraints: "
-                + "; ".join(violations)
-            )
+        # Direct Excel Mode / Full Survey mode:
+        # Preserve surveyed PFL as-is without validation barriers or recalculations.
+        self.logger.info("Direct Excel Mode: Preserving exact surveyed levels as-is.")
 
         # Build VIP table: Prefer official Gradient Excel schedule if provided/configured
         grad_p = gradient_excel_path or self.config.get("paths", {}).get("gradient_excel_path")

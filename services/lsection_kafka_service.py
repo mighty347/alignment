@@ -454,9 +454,10 @@ class LSectionKafkaService:
             generated_sheets: list[dict[str, Any]] = []
             for item in sheet_items:
                 final_dxf_url = item.dxf_url
-                if not final_dxf_url and item.local_dxf_path and self.s3_bucket:
+                local_path = getattr(item, "local_dxf_path", None)
+                if not final_dxf_url and local_path and self.s3_bucket:
                     try:
-                        final_dxf_url = self.upload_dxf(Path(item.local_dxf_path), version_id, item.sheet_number)
+                        final_dxf_url = self.upload_dxf(Path(local_path), version_id, item.sheet_number)
                     except Exception as up_err:
                         logger.warning("Could not upload sheet %d to S3: %s", item.sheet_number, up_err)
 
@@ -466,7 +467,7 @@ class LSectionKafkaService:
                     "startChainage": item.start_chainage_m,
                     "endChainage": item.end_chainage_m,
                     "datumRl": item.datum_rl_m,
-                    "dxfUrl": final_dxf_url or item.local_dxf_path,
+                    "dxfUrl": final_dxf_url or local_path,
                 })
 
             response_payload = {

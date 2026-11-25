@@ -517,10 +517,21 @@ class CompositeDrawer:
                     pv = self.template.profile_viewport
                     plv = self.template.plan_viewport
 
-                    origin_x = pv.x
-                    sidebar_x0 = sheet_width - sidebar_width - margin_sheet
-                    sidebar_x1 = sheet_width - margin_sheet
-                    draw_len_mm = max(100.0, sidebar_x0 - sidebar_gap - origin_x)
+                    true_len_mm = (draw_length_m / self.h_scale) * 1000.0 if (self.h_scale > 0 and draw_length_m > 0) else 1000.0
+                    avail_extra = sheet_width - (2.0 * margin_sheet) - sidebar_gap - true_len_mm
+                    if avail_extra >= 60.0 and avail_extra < (label_width + sidebar_width):
+                        # Strict A0 fit at true horizontal scale: compact left label column & right sidebar
+                        label_width = round(min(label_width, max(45.0, avail_extra * 0.315)), 2)
+                        sidebar_width = round(max(80.0, avail_extra - label_width), 2)
+                        origin_x = margin_sheet + label_width
+                        draw_len_mm = true_len_mm
+                        sidebar_x0 = origin_x + draw_len_mm + sidebar_gap
+                        sidebar_x1 = sheet_width - margin_sheet
+                    else:
+                        origin_x = max(float(pv.x), margin_sheet + label_width)
+                        sidebar_x0 = sheet_width - sidebar_width - margin_sheet
+                        sidebar_x1 = sheet_width - margin_sheet
+                        draw_len_mm = max(100.0, min(true_len_mm, sidebar_x0 - sidebar_gap - origin_x))
 
                     num_data_rows = len(self.template.get_enabled_bands()) if self.template.data_bands else 10
                     data_band_h = self.template.calculate_total_bands_height_mm() if self.template.data_bands else (num_data_rows * row_height)
@@ -661,23 +672,24 @@ class CompositeDrawer:
                 )
 
                 # ── 3. Render Standard 153mm Right Sidebar Panel ──
-                self._draw_right_sidebar(
-                    msp=msp,
-                    x0=sidebar_x0,
-                    x1=sidebar_x1,
-                    y0=margin_sheet,
-                    y1=sheet_height - margin_sheet,
-                    sheet_index=sheet_index,
-                    total_sheets=total_sheets,
-                    start_ch=start_ch,
-                    end_ch=end_ch,
-                    ip_df=ip_c,
-                    bridge_df=bridge_df,
-                    epsg_code=align_epsg,
-                    valign_res=valign_res,
-                    align_res=align_res,
-                    topo_res=topo_res,
-                )
+                if not self.config.get("drawing", {}).get("preview_skip_sidebar", False):
+                    self._draw_right_sidebar(
+                        msp=msp,
+                        x0=sidebar_x0,
+                        x1=sidebar_x1,
+                        y0=margin_sheet,
+                        y1=sheet_height - margin_sheet,
+                        sheet_index=sheet_index,
+                        total_sheets=total_sheets,
+                        start_ch=start_ch,
+                        end_ch=end_ch,
+                        ip_df=ip_c,
+                        bridge_df=bridge_df,
+                        epsg_code=align_epsg,
+                        valign_res=valign_res,
+                        align_res=align_res,
+                        topo_res=topo_res,
+                    )
 
                 # ── 4. Post-Scale Modelspace to True Ground Metres (1 CAD unit = 1.0 m) ──
                 self._apply_modelspace_scaling(msp)

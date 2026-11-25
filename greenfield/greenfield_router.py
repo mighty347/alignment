@@ -690,6 +690,101 @@ async def preview_greenfield_version(version_id: str) -> GreenfieldPreviewRespon
     )
 
 
+@router.post("/preview-dxf", status_code=status.HTTP_200_OK)
+async def preview_greenfield_composite_dxf(
+    payload: GreenfieldCompositeGenerateRequest,
+) -> dict[str, Any]:
+    """Fast single-sheet (first 5 km) composite DXF preview without PDF/S3/DB writes."""
+    try:
+        clean_version_id = _validate_uuid(payload.version_id, "version_id")
+    except ValueError as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err)) from err
+
+    import uuid
+    preview_id = f"preview_{uuid.uuid4().hex[:8]}"
+    session_dir = OUTPUTS_DIR / preview_id
+    temp_dir = TEMP_UPLOADS_DIR / preview_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        repo = _create_repository(BASE_CONFIG)
+        bundle = repo.load_version_bundle(clean_version_id)
+        if not bundle.band_points_df.empty and "chainage_m" in bundle.band_points_df.columns:
+            min_ch = float(bundle.band_points_df["chainage_m"].min())
+            bundle.band_points_df = bundle.band_points_df[
+                bundle.band_points_df["chainage_m"] <= (min_ch + 5000.0)
+            ].copy()
+
+        storage_mgr = _create_storage_manager(BASE_CONFIG)
+        kml_local: Optional[Path] = None
+        if bundle.version_meta.alignment_kml_url:
+            try:
+                kml_suffix = Path(bundle.version_meta.alignment_kml_url.split("?")[0]).suffix or ".kml"
+                kml_local = storage_mgr.download_file(
+                    bundle.version_meta.alignment_kml_url,
+                    temp_dir / f"alignment{kml_suffix}",
+                )
+            except Exception:
+                kml_local = None
+        if kml_local is None or not kml_local.exists():
+            kml_local = _synthesize_kml_from_band_points(bundle.band_points_df, temp_dir / "alignment.kml")
+
+        default_speed = float(BASE_CONFIG.get("railway", {}).get("design_speed", 100.0))
+        staged_paths = _stage_bundle_dataframes(bundle, temp_dir / "staged", default_speed)
+        session_cfg = _build_greenfield_session_config(
+            base_cfg=BASE_CONFIG,
+            bundle=bundle,
+            payload=payload,
+            session_dir=session_dir,
+            staged_paths=staged_paths,
+            kml_path=kml_local,
+            topo_path=None,
+        )
+        session_cfg.setdefault("drawing", {})
+        session_cfg["drawing"]["generate_complete_profile"] = False
+        session_cfg["drawing"]["generate_sheet_drawings"] = True
+        session_cfg["drawing"]["export_pdf"] = False
+        session_cfg["drawing"]["preview_skip_sidebar"] = True
+
+        active_template = payload.template
+        if active_template and isinstance(active_template, dict):
+            from template_models import LSectionSheetTemplate
+            active_template = LSectionSheetTemplate.model_validate(active_template)
+        elif payload.template_id:
+            with repo._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, name, corridor_type, paper, sheet_width_mm, sheet_height_mm,
+                               sidebar_width_mm, plan_viewport, profile_viewport, data_bands, sidebar, is_public, is_default
+                        FROM public.lsection_sheet_templates WHERE id = %s LIMIT 1;
+                        """,
+                        (payload.template_id,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        from template_models import LSectionSheetTemplate
+                        active_template = LSectionSheetTemplate(
+                            id=row[0], name=row[1], corridorType=row[2], paper=row[3],
+                            sheetWidthMm=float(row[4]), sheetHeightMm=float(row[5]),
+                            sidebarWidthMm=float(row[6]), planViewport=row[7],
+                            profileViewport=row[8], dataBands=row[9], sidebar=row[10],
+                            isPublic=bool(row[11]), isDefault=bool(row[12]),
+                        )
+
+        drawer = _create_composite_drawer(session_cfg, template=active_template)
+        res_dict = drawer.generate_from_inputs(output_prefix=f"preview_{clean_version_id[:8]}")
+        comp_res = res_dict.get("composite_result")
+        if comp_res is None or not Path(comp_res.dxf_path).exists():
+            raise HTTPException(status_code=500, detail="Preview DXF generation failed.")
+        dxf_text = Path(comp_res.dxf_path).read_text(encoding="utf-8", errors="replace")
+        return {"versionId": clean_version_id, "dxfContent": dxf_text}
+    finally:
+        shutil.rmtree(session_dir, ignore_errors=True)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 @router.post("/generate", response_model=GreenfieldGenerateAcceptedResponse, status_code=status.HTTP_202_ACCEPTED)
 async def generate_greenfield_composite(
     payload: GreenfieldCompositeGenerateRequest,

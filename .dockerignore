@@ -1,0 +1,21 @@
+# Version control & local environment
+.git/
+.gitignore
+.env
+venv/
+.venv/
+
+# Python caches & test artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+**/.pytest_cache/
+*.log
+
+# Runtime outputs & storage (bind-mounted via docker-compose)
+greenfield/outputs/
+greenfield/logs/
+storage/
+outputs/

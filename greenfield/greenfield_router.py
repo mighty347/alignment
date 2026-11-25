@@ -481,6 +481,7 @@ def _execute_greenfield_composite_job(
     session_dir.mkdir(parents=True, exist_ok=True)
     temp_dir.mkdir(parents=True, exist_ok=True)
     job = job_manager.get_job(job_id)
+    cleanup_session_dir = False
 
     try:
         job_manager.emit_event(job_id, "status", {"progress_percent": 20})
@@ -645,10 +646,14 @@ def _execute_greenfield_composite_job(
             if idx < len(sheet_items):
                 sheet_items[idx].sheet_id = sheet_id
 
+        cleanup_session_dir = bool(s3_bucket)
         return sheet_items
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
+        if cleanup_session_dir and session_dir.exists():
+            shutil.rmtree(session_dir, ignore_errors=True)
+            logger.info("Cleaned up local session outputs after S3 upload: %s", session_dir)
 
 
 # ---------------------------------------------------------------------------

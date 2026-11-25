@@ -271,6 +271,7 @@ def test_generate_and_poll_standalone_service(
     assert status_data["sheets"][0]["datum_rl_m"] == pytest.approx(10.0)
     assert status_data["sheets"][0]["dxf_url"].startswith("s3://esp-out/gf/run/")
     assert len(saved_records) == 1
+    assert list((tmp_path / "outputs").glob("gf_composite_*")) == []
 
 
 def test_generate_blocks_when_engineering_gate_fails(
@@ -318,4 +319,5 @@ def test_generate_blocks_when_engineering_gate_fails(
     assert status_data["status"] == "completed"
     assert status_data["verification_status"] == "FAIL"
     assert any("Track buildup invariant violated" in w for w in status_data.get("warnings", []))
+    assert len(list((tmp_path / "outputs").glob("gf_composite_*"))) == 1
 

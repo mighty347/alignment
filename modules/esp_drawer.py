@@ -1588,6 +1588,9 @@ class ESPDrawer:
         positions = []
         for i in range(n):
             x = self._ch_to_x(chainages[i], origin_x, start_ch=start_ch)
+            # Safety margin at station 0 to prevent rotated text from clashing into left table frame border
+            if i == 0 and abs(x - origin_x) < 2.0:
+                x = origin_x + max(2.2, text_h * 0.75)
             positions.append((i, x))
 
         return positions
@@ -1929,6 +1932,21 @@ class ESPDrawer:
                 dxfattribs={"layer": "HGEOM", "color": self.COL_RED, "lineweight": 18}
             )
 
+        if len(curve_spans) == 0:
+            txt_str = msp.add_text(
+                "STRAIGHT ALIGNMENT",
+                dxfattribs={
+                    "height": 2.2,
+                    "layer": "HGEOM",
+                    "style": "ESP_STYLE",
+                    "color": self.COL_RED,
+                }
+            )
+            txt_str.set_placement(
+                (origin_x + draw_length_mm / 2.0, cy + 1.6),
+                align=TextEntityAlignment.BOTTOM_CENTER
+            )
+
         # ── 2. Draw 3-Compartment Curve Diagrams (TRL, R, CL) inside Horizontal Geometry Row ──
         drawn_curve_spans: list[tuple[float, float]] = []
 
@@ -2264,46 +2282,70 @@ class ESPDrawer:
 
         # ── Map dynamic data bands from template if present ──
         if self.template and getattr(self.template, "data_bands", None):
-            key_to_id = {
-                "vgeom": "vgeom",
-                "gradient": "vgeom",
-                "vertical_geometry": "vgeom",
-                "gradient_and_vertical_curves": "vgeom",
-                "hgeom": "hgeom",
-                "horizontal_curve": "hgeom",
-                "horizontal_curves": "hgeom",
-                "horizontal_geometry": "hgeom",
-                "cut_fill": "cut_fill",
-                "cutting_filling": "cut_fill",
-                "diff_prl_erl": "diff_prl_erl",
-                "prl": "prl",
-                "proposed_rail_level": "prl",
-                "pfl": "pfl",
-                "proposed_formation_level": "pfl",
-                "formation_level": "pfl",
-                "erl": "erl",
-                "existing_rail_level": "erl",
-                "efl": "efl",
-                "existing_formation_level": "efl",
-                "egl": "egl",
-                "existing_ground_level": "egl",
-                "ground_level": "egl",
-                "chainage": "chainage",
-            }
+            def _resolve_band_id(k_str: str, lbl_str: str) -> str:
+                s = f"{k_str} {lbl_str}".lower()
+                if any(x in s for x in ["diff", "dif."]):
+                    return "diff_prl_erl"
+                if any(x in s for x in ["cut", "bank", "fill"]):
+                    return "cut_fill"
+                if any(x in s for x in ["prop", "pro."]) and "rail" in s:
+                    return "prl"
+                if any(x in s for x in ["prop", "pro."]) and "formation" in s:
+                    return "pfl"
+                if any(x in s for x in ["exg", "ex.", "exist"]) and "rail" in s:
+                    return "erl"
+                if any(x in s for x in ["exg", "ex.", "exist"]) and "formation" in s:
+                    return "efl"
+                if any(x in s for x in ["ground", "egl", "ngl", "line-1", "pro. dn line"]):
+                    return "egl"
+                if any(x in s for x in ["chainage", "ch."]):
+                    return "chainage"
+                if any(x in s for x in ["grad", "vgeom", "vert"]):
+                    return "vgeom"
+                if any(x in s for x in ["curve", "hgeom", "horiz"]):
+                    return "hgeom"
+                key_defaults = {
+                    "vgeom": "vgeom",
+                    "gradient": "vgeom",
+                    "vertical_geometry": "vgeom",
+                    "gradient_and_vertical_curves": "vgeom",
+                    "hgeom": "hgeom",
+                    "horizontal_curve": "hgeom",
+                    "horizontal_curves": "hgeom",
+                    "horizontal_geometry": "hgeom",
+                    "cut_fill": "cut_fill",
+                    "cutting_filling": "cut_fill",
+                    "diff_prl_erl": "diff_prl_erl",
+                    "prl": "prl",
+                    "proposed_rail_level": "prl",
+                    "pfl": "pfl",
+                    "proposed_formation_level": "pfl",
+                    "formation_level": "pfl",
+                    "erl": "erl",
+                    "existing_rail_level": "erl",
+                    "efl": "efl",
+                    "existing_formation_level": "efl",
+                    "egl": "egl",
+                    "existing_ground_level": "egl",
+                    "ground_level": "egl",
+                    "chainage": "chainage",
+                }
+                return key_defaults.get(k_str, k_str)
+
             cand_dict = {b["id"]: b for b in candidate_bands}
             ordered_bands = []
             for t_band in self.template.data_bands:
                 if not getattr(t_band, "enabled", True):
                     continue
                 k = getattr(t_band, "key", "").lower().replace("-", "_").replace(" ", "_")
-                mapped_id = key_to_id.get(k, k)
+                lbl = getattr(t_band, "label", None) or getattr(t_band, "title", None) or k
+                mapped_id = _resolve_band_id(k, lbl)
                 if mapped_id in cand_dict:
                     b_info = dict(cand_dict[mapped_id])
-                    lbl = getattr(t_band, "label", None)
                     if lbl:
                         b_info["label"] = lbl
-                    h_mm = getattr(t_band, "height_mm", None)
-                    if h_mm and h_mm > 0:
+                    h_mm = getattr(t_band, "height_mm", None) or getattr(t_band, "heightMm", None)
+                    if h_mm and float(h_mm) > 0:
                         b_info["height_mm"] = float(h_mm)
                     if b_info["available"]:
                         ordered_bands.append(b_info)
@@ -2328,10 +2370,10 @@ class ESPDrawer:
         labels = [(b["label"], b["color"]) for b in active_bands]
         self._draw_label_column(msp, origin_x, origin_y, labels, label_width, row_heights=row_heights)
 
-        # ── 1.0mm Station Ticks at Top & Bottom of Data Rows (skip geometry rows) ──
+        # ── 1.0mm Station Ticks at Top & Bottom of Data Rows (skip geometry rows and chainage row) ──
         tick_h = float(self.config.get("drawing", {}).get("tick_line_length_mm", 1.0))
         for r_idx, band in enumerate(active_bands):
-            if band["is_geom"]:
+            if band["is_geom"] or band["id"] == "chainage":
                 continue
             y_top = origin_y - cum_offsets[r_idx]
             y_bot = origin_y - cum_offsets[r_idx + 1]

@@ -535,6 +535,13 @@ def _execute_greenfield_composite_job(
 
         # Resolve dynamic L-Section sheet layout template
         active_template = payload.template
+        if active_template and isinstance(active_template, dict):
+            try:
+                from template_models import LSectionSheetTemplate
+                active_template = LSectionSheetTemplate.model_validate(active_template)
+            except Exception as t_err:
+                logger.warning("Could not model_validate payload.template: %s", t_err)
+
         if not active_template:
             tpl_id = payload.template_id
             try:
@@ -583,6 +590,24 @@ def _execute_greenfield_composite_job(
                             logger.info("Using LSectionSheetTemplate '%s' (%s) for job %s", active_template.id, active_template.name, job_id)
             except Exception as tpl_ex:
                 logger.warning("Failed to fetch template '%s': %s", tpl_id, tpl_ex)
+
+        # Inject user custom bands or survey Excel headers if provided
+        user_bands = payload.custom_bands or bundle.version_meta.band_headers
+        if user_bands and active_template:
+            from template_models import DataBandItem
+            new_bands: list[DataBandItem] = []
+            for b in user_bands:
+                if isinstance(b, dict):
+                    b_key = b.get("key") or b.get("id") or b.get("title", "").lower().replace(" ", "_")
+                    b_lbl = b.get("label") or b.get("title") or b_key
+                    b_h = float(b.get("heightMm") or b.get("height_mm") or 18.0)
+                    b_en = bool(b.get("enabled", True))
+                    new_bands.append(DataBandItem(key=b_key, label=b_lbl, heightMm=b_h, enabled=b_en))
+                elif isinstance(b, str):
+                    new_bands.append(DataBandItem(key=b.lower().replace(" ", "_"), label=b, heightMm=18.0, enabled=True))
+            if new_bands:
+                active_template.data_bands = new_bands
+                logger.info("Configured %d dynamic survey bands from user/Excel inputs for job %s", len(new_bands), job_id)
 
         job_manager.emit_event(job_id, "status", {"progress_percent": 55})
         drawer = _create_composite_drawer(session_cfg, template=active_template)

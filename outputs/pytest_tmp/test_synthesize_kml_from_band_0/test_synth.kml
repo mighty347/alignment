@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Alignment Centerline</name>
+    <Placemark>
+      <name>Track Alignment</name>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          86.5166070,21.7027126,0
+          86.5262731,21.7031922,0
+          86.5359393,21.7036713,0
+          86.5456056,21.7041498,0
+          86.5552719,21.7046277,0
+          86.5649383,21.7051051,0
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>

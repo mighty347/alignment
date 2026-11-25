@@ -438,10 +438,20 @@ class LSectionKafkaService:
                 payload.get("templateId")
                 or payload.get("template_id")
             )
+            template_obj = (
+                payload.get("template")
+                or payload.get("activeTemplate")
+            )
+            custom_bands = (
+                payload.get("customBands")
+                or payload.get("custom_bands")
+            )
 
             req = GreenfieldCompositeGenerateRequest(
                 version_id=str(version_id),
                 template_id=template_id,
+                template=template_obj,
+                custom_bands=custom_bands,
                 s3_output_bucket=self.s3_bucket,
                 generate_sheet_drawings=True,
                 export_pdf=False,

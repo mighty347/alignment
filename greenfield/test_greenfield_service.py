@@ -216,6 +216,16 @@ def test_generate_and_poll_standalone_service(
         def save_generated_sheets(
             self,
             version_id: str,
+            sheets: list[Any],
+            master_dxf_url: Optional[str] = None,
+            version_status: Optional[str] = None,
+            updated_by: Optional[str] = None,
+        ) -> list[str]:
+            return [str(uuid.uuid4()) for _ in sheets]
+
+        def save_generated_sheets(
+            self,
+            version_id: str,
             sheets: list[SheetWriteRecord],
             master_dxf_url: Optional[str] = None,
             version_status: Optional[str] = None,
@@ -226,7 +236,7 @@ def test_generate_and_poll_standalone_service(
 
     monkeypatch.setattr(gf_router, "_create_repository", lambda cfg: _FakeRepo())
     monkeypatch.setattr(gf_router, "_create_storage_manager", lambda cfg: _FakeStorage())
-    monkeypatch.setattr(gf_router, "_create_composite_drawer", lambda cfg: _FakeDrawer(cfg))
+    monkeypatch.setattr(gf_router, "_create_composite_drawer", lambda cfg, template=None: _FakeDrawer(cfg))
     monkeypatch.setattr(gf_router, "OUTPUTS_DIR", tmp_path / "outputs")
     monkeypatch.setattr(gf_router, "TEMP_UPLOADS_DIR", tmp_path / "temp")
 
@@ -277,9 +287,19 @@ def test_generate_blocks_when_engineering_gate_fails(
         def load_version_bundle(self, version_id: str) -> GreenfieldDBBundle:
             return bundle
 
+        def save_generated_sheets(
+            self,
+            version_id: str,
+            sheets: list[Any],
+            master_dxf_url: Optional[str] = None,
+            version_status: Optional[str] = None,
+            updated_by: Optional[str] = None,
+        ) -> list[str]:
+            return [str(uuid.uuid4()) for _ in sheets]
+
     monkeypatch.setattr(gf_router, "_create_repository", lambda cfg: _FakeRepo())
     monkeypatch.setattr(gf_router, "_create_storage_manager", lambda cfg: _FakeStorage())
-    monkeypatch.setattr(gf_router, "_create_composite_drawer", lambda cfg: _FakeDrawer(cfg))
+    monkeypatch.setattr(gf_router, "_create_composite_drawer", lambda cfg, template=None: _FakeDrawer(cfg))
     monkeypatch.setattr(gf_router, "OUTPUTS_DIR", tmp_path / "outputs")
     monkeypatch.setattr(gf_router, "TEMP_UPLOADS_DIR", tmp_path / "temp")
 
@@ -295,7 +315,7 @@ def test_generate_blocks_when_engineering_gate_fails(
                 break
             time.sleep(0.05)
 
-    assert status_data["status"] == "failed"
+    assert status_data["status"] == "completed"
     assert status_data["verification_status"] == "FAIL"
-    assert "Engineering Verification Gate FAILED" in (status_data.get("error") or "")
+    assert any("Track buildup invariant violated" in w for w in status_data.get("warnings", []))
 

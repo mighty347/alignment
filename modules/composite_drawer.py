@@ -821,6 +821,12 @@ class CompositeDrawer:
             dxfattribs={"layer": "BORDER", "color": sb_color, "lineweight": sb_lineweight},
         )
 
+        # If template has custom sidebar.boxes, render them directly
+        custom_boxes = self._extract_sidebar_boxes()
+        if custom_boxes:
+            self._draw_sidebar_from_boxes(msp, custom_boxes, x0, x1, y0, y1, sb_color)
+            return
+
         notes_cfg = self.config.get("drawing", {}).get("sidebar_notes", {})
         if not notes_cfg.get("enabled", True):
             return
@@ -1098,6 +1104,194 @@ class CompositeDrawer:
                 row_text,
                 dxfattribs={"height": 2.2, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": r_color},
             ).set_placement((tx, row_y), align=TextEntityAlignment.MIDDLE_LEFT)
+
+    @staticmethod
+    def _strip_markup(raw_text: str) -> str:
+        """Remove HTML/color markup tags used by the web template designer."""
+        import re
+        cleaned = re.sub(r"</?(?:u|b)>", "", str(raw_text or ""), flags=re.IGNORECASE)
+        return re.sub(r"</?c(?:=#[0-9a-fA-F]{6})?>", "", cleaned, flags=re.IGNORECASE)
+
+    def _extract_sidebar_boxes(self) -> list[dict[str, Any]]:
+        """Filter template.sidebar.boxes to right-sidebar items only."""
+        if not self.template or not getattr(self.template, "sidebar", None):
+            return []
+        raw_boxes = getattr(self.template.sidebar, "boxes", None)
+        if not raw_boxes or not isinstance(raw_boxes, list):
+            return []
+
+        sheet_w = float(getattr(self.template, "sheet_width_mm", 1189.0) or 1189.0)
+        excluded_keys = {
+            "plan", "elv", "hydraulic",
+            "divider-80-20", "divider-plan-profile", "divider-profile-bands",
+        }
+        excluded_prefixes = (
+            "box-plan", "box-profile", "box-bands",
+            "div-wr-vertical-partition", "div-wr-horiz-",
+            "div-rdso-vertical-partition", "div-rdso-horiz-",
+        )
+
+        sidebar_boxes: list[dict[str, Any]] = []
+        for box in raw_boxes:
+            if not isinstance(box, dict):
+                continue
+            b_id = str(box.get("id", "")).lower()
+            s_key = str(box.get("sectionKey", "")).lower()
+            kind = str(box.get("kind", "")).lower()
+            if kind == "view" or s_key in excluded_keys or b_id.startswith(excluded_prefixes):
+                continue
+            bx = float(box.get("x", 0.0) or 0.0)
+            bw = float(box.get("w", 0.0) or 0.0)
+            if (bx + bw * 0.5) < (sheet_w * 0.65):
+                continue
+            sidebar_boxes.append(box)
+        return sidebar_boxes
+
+    def _draw_sidebar_from_boxes(
+        self,
+        msp: Any,
+        boxes: list[dict[str, Any]],
+        x0: float,
+        x1: float,
+        y0: float,
+        y1: float,
+        sb_color: int,
+    ) -> None:
+        """Map sidebar.boxes into the DXF right-sidebar bounds and render each box."""
+        pad = 2.5
+        tx0, tx1 = x0 + pad, x1 - pad
+        ty0, ty1 = y0 + pad, y1 - pad
+        target_w = max(10.0, tx1 - tx0)
+        target_h = max(10.0, ty1 - ty0)
+
+        src_x0 = min(float(b.get("x", 0.0) or 0.0) for b in boxes)
+        src_y0 = min(float(b.get("y", 0.0) or 0.0) for b in boxes)
+        src_x1 = max(float(b.get("x", 0.0) or 0.0) + float(b.get("w", 0.0) or 0.0) for b in boxes)
+        src_y1 = max(float(b.get("y", 0.0) or 0.0) + float(b.get("h", 0.0) or 0.0) for b in boxes)
+        src_w = max(1.0, src_x1 - src_x0)
+        src_h = max(1.0, src_y1 - src_y0)
+
+        sx = target_w / src_w
+        sy = target_h / src_h
+
+        for box in boxes:
+            bx0 = tx0 + (float(box.get("x", 0.0) or 0.0) - src_x0) * sx
+            bx1 = bx0 + float(box.get("w", 0.0) or 0.0) * sx
+            by1 = ty1 - (float(box.get("y", 0.0) or 0.0) - src_y0) * sy
+            by0 = by1 - float(box.get("h", 0.0) or 0.0) * sy
+
+            if box.get("previewElement") == "divider" or box.get("kind") == "divider":
+                ymid = (by0 + by1) / 2.0
+                msp.add_line((bx0, ymid), (bx1, ymid), dxfattribs={"layer": "BORDER", "color": sb_color, "lineweight": 18})
+            elif box.get("tableColumns") or box.get("tableRows"):
+                self._draw_sidebar_table_box(msp, box, bx0, by0, bx1, by1, sb_color)
+            else:
+                self._draw_sidebar_text_box(msp, box, bx0, by0, bx1, by1, sb_color)
+
+    def _draw_sidebar_table_box(
+        self,
+        msp: Any,
+        box: dict[str, Any],
+        bx0: float,
+        by0: float,
+        bx1: float,
+        by1: float,
+        sb_color: int,
+    ) -> None:
+        """Render a sidebar table box (title block, legend, speed params, TBM list, etc.)."""
+        cols = [str(c) for c in (box.get("tableColumns") or [])]
+        body_rows = [[str(cell) for cell in r] for r in (box.get("tableRows") or [])]
+        all_rows = ([cols] if cols else []) + body_rows
+        if not all_rows:
+            return
+
+        num_rows = len(all_rows)
+        num_cols = max(len(r) for r in all_rows)
+        if num_cols <= 0:
+            return
+
+        msp.add_lwpolyline(
+            [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1), (bx0, by0)],
+            dxfattribs={"layer": "TITLE_BLOCK", "color": sb_color, "lineweight": 25},
+        )
+
+        col_w = (bx1 - bx0) / num_cols
+        row_h = (by1 - by0) / num_rows
+        text_h = min(2.2, max(1.2, row_h * 0.42))
+
+        for r_idx in range(1, num_rows):
+            ry = by1 - r_idx * row_h
+            msp.add_line((bx0, ry), (bx1, ry), dxfattribs={"layer": "TITLE_BLOCK", "color": sb_color, "lineweight": 13})
+        for c_idx in range(1, num_cols):
+            cx = bx0 + c_idx * col_w
+            msp.add_line((cx, by0), (cx, by1), dxfattribs={"layer": "TITLE_BLOCK", "color": sb_color, "lineweight": 13})
+
+        max_chars = max(8, int((col_w - 2.0) / (text_h * 0.58)))
+        for r_idx, row in enumerate(all_rows):
+            row_top = by1 - r_idx * row_h
+            row_mid = row_top - row_h / 2.0
+            is_header = bool(cols) and r_idx == 0
+            t_color = self.COL_RED if is_header else self.COL_BLACK
+            for c_idx in range(num_cols):
+                raw_cell = row[c_idx] if c_idx < len(row) else ""
+                cell_text = self._strip_markup(raw_cell).strip()
+                if not cell_text:
+                    continue
+                wrapped = textwrap.wrap(cell_text, width=max_chars)[:2]
+                cx = bx0 + c_idx * col_w + 1.2
+                if len(wrapped) == 1:
+                    msp.add_text(
+                        wrapped[0],
+                        dxfattribs={"height": text_h, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": t_color},
+                    ).set_placement((cx, row_mid), align=TextEntityAlignment.MIDDLE_LEFT)
+                else:
+                    line_gap = text_h * 1.25
+                    for l_idx, line in enumerate(wrapped):
+                        ly = row_mid + (0.5 - l_idx) * line_gap
+                        msp.add_text(
+                            line,
+                            dxfattribs={"height": text_h * 0.9, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": t_color},
+                        ).set_placement((cx, ly), align=TextEntityAlignment.MIDDLE_LEFT)
+
+    def _draw_sidebar_text_box(
+        self,
+        msp: Any,
+        box: dict[str, Any],
+        bx0: float,
+        by0: float,
+        bx1: float,
+        by1: float,
+        sb_color: int,
+    ) -> None:
+        """Render a sidebar notes or text box with markup stripped."""
+        msp.add_lwpolyline(
+            [(bx0, by0), (bx1, by0), (bx1, by1), (bx0, by1), (bx0, by0)],
+            dxfattribs={"layer": "BORDER", "color": sb_color, "lineweight": 20},
+        )
+        raw = box.get("text") or "\n".join(box.get("notesLines") or [])
+        cleaned = self._strip_markup(str(raw or ""))
+        if not cleaned.strip():
+            return
+
+        box_w = max(10.0, bx1 - bx0)
+        text_h = min(2.4, max(1.5, float(box.get("fontSizeMm") or 2.2)))
+        line_step = text_h * 1.55
+        wrap_chars = max(18, int((box_w - 4.0) / (text_h * 0.58)))
+        curr_y = by1 - 3.5
+
+        for para in cleaned.split("\n"):
+            p = para.strip()
+            if not p:
+                curr_y -= line_step * 0.6
+                continue
+            for line in textwrap.wrap(p, width=wrap_chars):
+                if curr_y < by0 + 2.0:
+                    return
+                msp.add_text(
+                    line,
+                    dxfattribs={"height": text_h, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": self.COL_BLACK},
+                ).set_placement((bx0 + 2.0, curr_y), align=TextEntityAlignment.TOP_LEFT)
+                curr_y -= line_step
 
     def generate_from_inputs(self, output_prefix: str = "composite_plan_profile") -> dict[str, Any]:
         """Run the complete end-to-end Railway ESP pipeline to generate Composite DXF sheets."""

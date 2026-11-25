@@ -10,3 +10,5 @@ storage/dtm/*.tif
 storage/dtm/*.sqlite
 greenfield/outputs/
 greenfield/logs/
+outputs/
+tests/

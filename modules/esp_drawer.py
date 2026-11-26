@@ -120,27 +120,6 @@ class ESPDrawer:
 
         self.outputs_dir = Path(config.get("paths", {}).get("outputs_dir", "outputs"))
 
-        # Drawing scales per RDSO: H=1:5,000  V=1:500
-        drawing_cfg = config.get("drawing", {})
-        self.h_scale: float = float(
-            drawing_cfg.get("profile_h_scale",
-            drawing_cfg.get("plan_scale",
-            drawing_cfg.get("h_scale", 5000.0)))
-        )
-        self.v_scale: float = float(
-            drawing_cfg.get("profile_v_scale",
-            drawing_cfg.get("v_scale", 500.0))
-        )
-
-        # Max alignment length per L-Section sheet (default: 5000.0 m / 5 km)
-        self.max_lsection_length_m: float = float(
-            drawing_cfg.get("max_lsection_length_m", 5000.0)
-        )
-        self.generate_complete_profile: bool = bool(drawing_cfg.get("generate_complete_profile", True))
-        self.generate_sheet_drawings: bool = bool(drawing_cfg.get("generate_sheet_drawings", True))
-
-        self.row_height: float = 18.0    # mm — height of each data row
-
         # Resolve dynamic template if provided
         self.template = None
         raw_tpl = template or config.get("template") or config.get("lsection_template")
@@ -151,8 +130,33 @@ class ESPDrawer:
                 try:
                     from template_models import LSectionSheetTemplate
                     self.template = LSectionSheetTemplate.model_validate(raw_tpl)
-                except Exception:
-                    pass
+                except Exception as tpl_err:
+                    self.logger.warning("Failed to validate LSectionSheetTemplate: %s", tpl_err)
+
+        # Drawing scales: prefer template.profile_viewport when provided, else config
+        drawing_cfg = config.get("drawing", {})
+        if self.template is not None and getattr(self.template, "profile_viewport", None) is not None:
+            self.h_scale: float = float(self.template.profile_viewport.h_scale)
+            self.v_scale: float = float(self.template.profile_viewport.v_scale)
+        else:
+            self.h_scale = float(
+                drawing_cfg.get("profile_h_scale",
+                drawing_cfg.get("plan_scale",
+                drawing_cfg.get("h_scale", 5000.0)))
+            )
+            self.v_scale = float(
+                drawing_cfg.get("profile_v_scale",
+                drawing_cfg.get("v_scale", 500.0))
+            )
+
+        # Max alignment length per L-Section sheet (default: 5000.0 m / 5 km)
+        self.max_lsection_length_m: float = float(
+            drawing_cfg.get("max_lsection_length_m", 5000.0)
+        )
+        self.generate_complete_profile: bool = bool(drawing_cfg.get("generate_complete_profile", True))
+        self.generate_sheet_drawings: bool = bool(drawing_cfg.get("generate_sheet_drawings", True))
+
+        self.row_height: float = 18.0    # mm — height of each data row
 
         # Track buildup constant (config or IR standard 762mm)
         vert_cfg = config.get("vertical", {})
@@ -1638,6 +1642,85 @@ class ESPDrawer:
             )
             txt.set_placement((x, row_center_y), align=TextEntityAlignment.MIDDLE_CENTER)
 
+    @staticmethod
+    def _normalize_band_key(raw: str) -> str:
+        """Normalize a band key/header for matching raw profile_df columns."""
+        return re.sub(r"[^a-z0-9]+", "_", str(raw or "").strip().lower()).strip("_")
+
+    @classmethod
+    def _resolve_custom_profile_column(
+        cls,
+        profile_df: Optional[pd.DataFrame],
+        key: str,
+        label: str,
+    ) -> Optional[str]:
+        """Find a matching column in profile_df for a custom/non-railway band."""
+        if profile_df is None or profile_df.empty:
+            return None
+        for candidate in (key, label):
+            if candidate and candidate in profile_df.columns and profile_df[candidate].notna().any():
+                return candidate
+        norm_map = {cls._normalize_band_key(c): c for c in profile_df.columns}
+        for candidate in (key, label):
+            norm_cand = cls._normalize_band_key(candidate)
+            if norm_cand and norm_cand in norm_map:
+                col = norm_map[norm_cand]
+                if profile_df[col].notna().any():
+                    return col
+        return None
+
+    def _draw_custom_band_values(
+        self,
+        msp: Any,
+        chainages: np.ndarray,
+        profile_df: Optional[pd.DataFrame],
+        source_col: str,
+        origin_x: float,
+        row_center_y: float,
+        color: int,
+        start_ch: float = 0.0,
+    ) -> None:
+        """Render rotated (90 deg) numeric or text values for a custom profile_df band column."""
+        if profile_df is None or profile_df.empty or source_col not in profile_df.columns:
+            return
+        if "chainage_m" not in profile_df.columns:
+            return
+
+        max_text_h = float(self.config.get("drawing", {}).get("text_height_data_mm", 2.5))
+        text_h = max(2.0, max_text_h)
+        layer = "DATA_RED" if color == self.COL_RED else "DATA_BLACK"
+        positions = self._get_label_positions(chainages, origin_x, text_h, start_ch=start_ch)
+        prof_ch = profile_df["chainage_m"].values
+        col_vals = profile_df[source_col].values
+
+        for idx, x in positions:
+            if idx >= len(chainages):
+                continue
+            c_val = chainages[idx]
+            mask = np.isclose(prof_ch, c_val, atol=0.5)
+            if not np.any(mask):
+                continue
+            raw_val = col_vals[mask][0]
+            if pd.isna(raw_val):
+                continue
+            if isinstance(raw_val, (int, float, np.number)):
+                val_str = f"{float(raw_val):.3f}"
+            else:
+                val_str = str(raw_val).strip()
+                if not val_str:
+                    continue
+            txt = msp.add_text(
+                val_str,
+                dxfattribs={
+                    "height": text_h,
+                    "rotation": 90,
+                    "layer": layer,
+                    "style": "ESP_STYLE",
+                    "color": color,
+                },
+            )
+            txt.set_placement((x, row_center_y), align=TextEntityAlignment.MIDDLE_CENTER)
+
     # -------------------------------------------------------------------------
     # Row 0 — VERTICAL GEOMETRY
     # -------------------------------------------------------------------------
@@ -2122,6 +2205,155 @@ class ESPDrawer:
 
     # -------------------------------------------------------------------------
     # Data Band Orchestrator
+    def _prepare_band_arrays(
+        self,
+        chainages: np.ndarray,
+        egl: np.ndarray,
+        fl: np.ndarray,
+        profile_df: Optional[pd.DataFrame] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Normalize regular chainages and compute derived profile band arrays."""
+        interval_m = float(self.config.get("chainage", {}).get("interval_m", 20.0))
+        rem = chainages % interval_m
+        mask_reg = np.minimum(rem, interval_m - rem) < 0.5
+        if not np.all(mask_reg):
+            chainages = np.round(chainages[mask_reg] / interval_m) * interval_m
+            egl = egl[mask_reg]
+            fl = fl[mask_reg]
+            _, unique_idx = np.unique(chainages, return_index=True)
+            chainages = chainages[unique_idx]
+            egl = egl[unique_idx]
+            fl = fl[unique_idx]
+
+        prl = fl + self.track_buildup_m
+        cf = fl - egl
+        efl = np.full(len(chainages), np.nan)
+        erl = np.full(len(chainages), np.nan)
+
+        if profile_df is not None and "chainage_m" in profile_df.columns:
+            prof_ch = profile_df["chainage_m"].values
+            if "existing_formation_level_m" in profile_df.columns:
+                prof_efl = profile_df["existing_formation_level_m"].values
+                for idx_c, c_val in enumerate(chainages):
+                    mask = np.isclose(prof_ch, c_val, atol=0.5)
+                    if np.any(mask):
+                        val = prof_efl[mask][0]
+                        if not np.isnan(val) and val != 0.0:
+                            efl[idx_c] = val
+
+            if "existing_rail_level_m" in profile_df.columns:
+                prof_erl = profile_df["existing_rail_level_m"].values
+                for idx_c, c_val in enumerate(chainages):
+                    mask = np.isclose(prof_ch, c_val, atol=0.5)
+                    if np.any(mask):
+                        val = prof_erl[mask][0]
+                        if not np.isnan(val) and val != 0.0:
+                            erl[idx_c] = val
+
+        erl = np.where(np.isnan(erl) & ~np.isnan(efl), efl + 0.738, erl)
+        diff = np.where(np.isnan(erl), np.nan, prl - erl)
+        return chainages, egl, fl, prl, cf, efl, erl, diff
+
+    def resolve_active_bands(
+        self,
+        chainages: np.ndarray,
+        egl: np.ndarray,
+        fl: np.ndarray,
+        vip_df: Optional[pd.DataFrame] = None,
+        ip_df: Optional[pd.DataFrame] = None,
+        profile_df: Optional[pd.DataFrame] = None,
+    ) -> list[dict[str, Any]]:
+        """Resolve the ordered list of data bands that will actually render on the sheet."""
+        chainages, egl, fl, prl, cf, efl, erl, diff = self._prepare_band_arrays(
+            chainages, egl, fl, profile_df=profile_df
+        )
+
+        def _has_valid_data(arr: Optional[np.ndarray]) -> bool:
+            return arr is not None and len(arr) > 0 and bool(np.any(np.isfinite(arr)))
+
+        candidate_bands: list[dict[str, Any]] = [
+            {"id": "vgeom", "label": "VERTICAL GEOMETRY", "color": self.COL_RED, "is_geom": True, "available": (vip_df is not None and not vip_df.empty) or _has_valid_data(fl)},
+            {"id": "hgeom", "label": "HORIZONTAL GEOMETRY", "color": self.COL_RED, "is_geom": True, "available": (ip_df is not None and not ip_df.empty)},
+            {"id": "cut_fill", "label": "PRO. BANK/CUTTING (THROUGH) PROP. DN MAIN", "color": self.COL_RED, "is_geom": False, "available": _has_valid_data(cf)},
+            {"id": "diff_prl_erl", "label": "DIF. BETWEEN PROP. DN MAIN (THROUGH) RAIL LEVEL & EXG. UP MAIN RAIL LEVEL", "color": self.COL_RED, "is_geom": False, "available": _has_valid_data(diff)},
+            {"id": "prl", "label": "PROPOSED RAIL LEVEL", "color": self.COL_RED, "is_geom": False, "available": _has_valid_data(prl)},
+            {"id": "pfl", "label": "PROPOSED FORMATION LEVEL", "color": self.COL_RED, "is_geom": False, "available": _has_valid_data(fl)},
+            {"id": "erl", "label": "EXISTING RAIL LEVEL (EFL + 0.738M)", "color": self.COL_BLACK, "is_geom": False, "available": _has_valid_data(erl)},
+            {"id": "efl", "label": "EXISTING FORMATION LEVEL (AS PER SITE)", "color": self.COL_BLACK, "is_geom": False, "available": _has_valid_data(efl)},
+            {"id": "egl", "label": "GROUND LINE (Pro. DN line-1)", "color": self.COL_BLACK, "is_geom": False, "available": _has_valid_data(egl)},
+            {"id": "chainage", "label": "CHAINAGE", "color": self.COL_BLACK, "is_geom": False, "available": len(chainages) > 0},
+        ]
+
+        if self.template is None:
+            return [b for b in candidate_bands if b["available"]]
+
+        def _resolve_band_id(k_str: str, lbl_str: str) -> str:
+            s = f"{k_str} {lbl_str}".lower()
+            if any(x in s for x in ["diff", "dif."]):
+                return "diff_prl_erl"
+            if any(x in s for x in ["cut", "bank", "fill"]):
+                return "cut_fill"
+            if any(x in s for x in ["prop", "pro."]) and "rail" in s:
+                return "prl"
+            if any(x in s for x in ["prop", "pro."]) and "formation" in s:
+                return "pfl"
+            if any(x in s for x in ["exg", "ex.", "exist"]) and "rail" in s:
+                return "erl"
+            if any(x in s for x in ["exg", "ex.", "exist"]) and "formation" in s:
+                return "efl"
+            if any(x in s for x in ["ground", "egl", "ngl", "line-1", "pro. dn line"]):
+                return "egl"
+            if any(x in s for x in ["chainage", "ch."]):
+                return "chainage"
+            if any(x in s for x in ["grad", "vgeom", "vert"]):
+                return "vgeom"
+            if any(x in s for x in ["curve", "hgeom", "horiz"]):
+                return "hgeom"
+            key_defaults = {
+                "vgeom": "vgeom", "gradient": "vgeom", "vertical_geometry": "vgeom", "gradient_and_vertical_curves": "vgeom",
+                "hgeom": "hgeom", "horizontal_curve": "hgeom", "horizontal_curves": "hgeom", "horizontal_geometry": "hgeom",
+                "cut_fill": "cut_fill", "cutting_filling": "cut_fill",
+                "diff_prl_erl": "diff_prl_erl",
+                "prl": "prl", "proposed_rail_level": "prl",
+                "pfl": "pfl", "proposed_formation_level": "pfl", "formation_level": "pfl",
+                "erl": "erl", "existing_rail_level": "erl",
+                "efl": "efl", "existing_formation_level": "efl",
+                "egl": "egl", "existing_ground_level": "egl", "ground_level": "egl",
+                "chainage": "chainage",
+            }
+            return key_defaults.get(k_str, k_str)
+
+        cand_dict = {b["id"]: b for b in candidate_bands}
+        ordered_bands: list[dict[str, Any]] = []
+        for t_band in (getattr(self.template, "data_bands", None) or []):
+            if not getattr(t_band, "enabled", True):
+                continue
+            k = getattr(t_band, "key", "").lower().replace("-", "_").replace(" ", "_")
+            lbl = getattr(t_band, "label", None) or getattr(t_band, "title", None) or k
+            h_mm = getattr(t_band, "height_mm", None) or getattr(t_band, "heightMm", None)
+            mapped_id = _resolve_band_id(k, lbl)
+            if mapped_id in cand_dict:
+                b_info = dict(cand_dict[mapped_id])
+                if lbl:
+                    b_info["label"] = lbl
+                if h_mm and float(h_mm) > 0:
+                    b_info["height_mm"] = float(h_mm)
+                if b_info["available"]:
+                    ordered_bands.append(b_info)
+            else:
+                custom_col = self._resolve_custom_profile_column(profile_df, k, lbl)
+                if custom_col is not None:
+                    ordered_bands.append({
+                        "id": "custom",
+                        "source_col": custom_col,
+                        "label": lbl,
+                        "color": self.COL_BLACK,
+                        "is_geom": False,
+                        "available": True,
+                        "height_mm": float(h_mm) if (h_mm and float(h_mm) > 0) else self.row_height,
+                    })
+        return ordered_bands
+
     # -------------------------------------------------------------------------
     def _draw_data_rows(
         self,
@@ -2139,218 +2371,19 @@ class ESPDrawer:
         start_ch: float = 0.0,
         profile_df: Optional[pd.DataFrame] = None,
     ) -> None:
-        """Draw L-Section data bands dynamically based on available data.
-
-        Omit band rows and label columns if values are not available.
-        Candidate row order (top to bottom):
-            - VERTICAL GEOMETRY     (Red)
-            - HORIZONTAL GEOMETRY   (Red)
-            - CUT (-) FILL (+)      (Red)
-            - DIFF PRL & ERL        (Red — rendered only if surveyed data available)
-            - PROP RAIL LEVEL       (Red)
-            - PROP. FORMATION LEVEL (Red)
-            - EX RAIL LEVEL         (Black — rendered only if surveyed data available)
-            - EX. FORMATION LEVEL   (Black — rendered only if surveyed data available)
-            - GROUND LEVEL          (Black)
-            - CHAINAGE              (Black)
-        """
+        """Draw L-Section data bands dynamically based on available data."""
         rh = self.row_height
-
-        # ── Ensure strictly regular interval (e.g. 20m) for data rows and ticks ──
-        interval_m = float(self.config.get("chainage", {}).get("interval_m", 20.0))
-        rem = chainages % interval_m
-        mask_reg = (np.minimum(rem, interval_m - rem) < 0.5)
-        if not np.all(mask_reg):
-            chainages = np.round(chainages[mask_reg] / interval_m) * interval_m
-            egl = egl[mask_reg]
-            fl = fl[mask_reg]
-            _, unique_idx = np.unique(chainages, return_index=True)
-            chainages = chainages[unique_idx]
-            egl = egl[unique_idx]
-            fl = fl[unique_idx]
-
-        # ── Derived data ──────────────────────────────────────────────────────
-        prl    = fl + self.track_buildup_m   # PRL = PFL + 762mm
-        cf     = fl - egl                    # Cut(-) Fill(+): negative = cut
-        
-        # Existing Track & Formation Levels — populate from profile_df or fallback to PFL
-        efl = np.full(len(chainages), np.nan)
-        erl = np.full(len(chainages), np.nan)
-
-        if profile_df is not None:
-            if "existing_formation_level_m" in profile_df.columns and "chainage_m" in profile_df.columns:
-                prof_ch = profile_df["chainage_m"].values
-                prof_efl = profile_df["existing_formation_level_m"].values
-                for idx_c, c_val in enumerate(chainages):
-                    mask = np.isclose(prof_ch, c_val, atol=0.5)
-                    if np.any(mask):
-                        val = prof_efl[mask][0]
-                        if not np.isnan(val) and val != 0.0:
-                            efl[idx_c] = val
-
-            if "existing_rail_level_m" in profile_df.columns and "chainage_m" in profile_df.columns:
-                prof_ch = profile_df["chainage_m"].values
-                prof_erl = profile_df["existing_rail_level_m"].values
-                for idx_c, c_val in enumerate(chainages):
-                    mask = np.isclose(prof_ch, c_val, atol=0.5)
-                    if np.any(mask):
-                        val = prof_erl[mask][0]
-                        if not np.isnan(val) and val != 0.0:
-                            erl[idx_c] = val
-
-        # If efl is set but erl is not, calculate erl = efl + 0.738m ONLY if efl has valid non-NaN values
-        erl = np.where(np.isnan(erl) & ~np.isnan(efl), efl + 0.738, erl)
-        diff = np.where(np.isnan(erl), np.nan, prl - erl)
-
-        def _has_valid_data(arr: Optional[np.ndarray]) -> bool:
-            return arr is not None and len(arr) > 0 and bool(np.any(np.isfinite(arr)))
-
-        # Define candidate bands in standard Indian Railways order
-        candidate_bands: list[dict[str, Any]] = [
-            {
-                "id": "vgeom",
-                "label": "VERTICAL GEOMETRY",
-                "color": self.COL_RED,
-                "is_geom": True,
-                "available": (vip_df is not None and not vip_df.empty) or _has_valid_data(fl),
-            },
-            {
-                "id": "hgeom",
-                "label": "HORIZONTAL GEOMETRY",
-                "color": self.COL_RED,
-                "is_geom": True,
-                "available": (ip_df is not None and not ip_df.empty),
-            },
-            {
-                "id": "cut_fill",
-                "label": "PRO. BANK/CUTTING (THROUGH) PROP. DN MAIN",
-                "color": self.COL_RED,
-                "is_geom": False,
-                "available": _has_valid_data(cf),
-            },
-            {
-                "id": "diff_prl_erl",
-                "label": "DIF. BETWEEN PROP. DN MAIN (THROUGH) RAIL LEVEL & EXG. UP MAIN RAIL LEVEL",
-                "color": self.COL_RED,
-                "is_geom": False,
-                "available": _has_valid_data(diff),
-            },
-            {
-                "id": "prl",
-                "label": "PROPOSED RAIL LEVEL",
-                "color": self.COL_RED,
-                "is_geom": False,
-                "available": _has_valid_data(prl),
-            },
-            {
-                "id": "pfl",
-                "label": "PROPOSED FORMATION LEVEL",
-                "color": self.COL_RED,
-                "is_geom": False,
-                "available": _has_valid_data(fl),
-            },
-            {
-                "id": "erl",
-                "label": "EXISTING RAIL LEVEL (EFL + 0.738M)",
-                "color": self.COL_BLACK,
-                "is_geom": False,
-                "available": _has_valid_data(erl),
-            },
-            {
-                "id": "efl",
-                "label": "EXISTING FORMATION LEVEL (AS PER SITE)",
-                "color": self.COL_BLACK,
-                "is_geom": False,
-                "available": _has_valid_data(efl),
-            },
-            {
-                "id": "egl",
-                "label": "GROUND LINE (Pro. DN line-1)",
-                "color": self.COL_BLACK,
-                "is_geom": False,
-                "available": _has_valid_data(egl),
-            },
-            {
-                "id": "chainage",
-                "label": "CHAINAGE",
-                "color": self.COL_BLACK,
-                "is_geom": False,
-                "available": len(chainages) > 0,
-            },
-        ]
-
-        active_bands = [b for b in candidate_bands if b["available"]]
-
-        # ── Map dynamic data bands strictly from template when provided (no fallback) ──
-        if self.template is not None:
-            def _resolve_band_id(k_str: str, lbl_str: str) -> str:
-                s = f"{k_str} {lbl_str}".lower()
-                if any(x in s for x in ["diff", "dif."]):
-                    return "diff_prl_erl"
-                if any(x in s for x in ["cut", "bank", "fill"]):
-                    return "cut_fill"
-                if any(x in s for x in ["prop", "pro."]) and "rail" in s:
-                    return "prl"
-                if any(x in s for x in ["prop", "pro."]) and "formation" in s:
-                    return "pfl"
-                if any(x in s for x in ["exg", "ex.", "exist"]) and "rail" in s:
-                    return "erl"
-                if any(x in s for x in ["exg", "ex.", "exist"]) and "formation" in s:
-                    return "efl"
-                if any(x in s for x in ["ground", "egl", "ngl", "line-1", "pro. dn line"]):
-                    return "egl"
-                if any(x in s for x in ["chainage", "ch."]):
-                    return "chainage"
-                if any(x in s for x in ["grad", "vgeom", "vert"]):
-                    return "vgeom"
-                if any(x in s for x in ["curve", "hgeom", "horiz"]):
-                    return "hgeom"
-                key_defaults = {
-                    "vgeom": "vgeom",
-                    "gradient": "vgeom",
-                    "vertical_geometry": "vgeom",
-                    "gradient_and_vertical_curves": "vgeom",
-                    "hgeom": "hgeom",
-                    "horizontal_curve": "hgeom",
-                    "horizontal_curves": "hgeom",
-                    "horizontal_geometry": "hgeom",
-                    "cut_fill": "cut_fill",
-                    "cutting_filling": "cut_fill",
-                    "diff_prl_erl": "diff_prl_erl",
-                    "prl": "prl",
-                    "proposed_rail_level": "prl",
-                    "pfl": "pfl",
-                    "proposed_formation_level": "pfl",
-                    "formation_level": "pfl",
-                    "erl": "erl",
-                    "existing_rail_level": "erl",
-                    "efl": "efl",
-                    "existing_formation_level": "efl",
-                    "egl": "egl",
-                    "existing_ground_level": "egl",
-                    "ground_level": "egl",
-                    "chainage": "chainage",
-                }
-                return key_defaults.get(k_str, k_str)
-
-            cand_dict = {b["id"]: b for b in candidate_bands}
-            ordered_bands = []
-            for t_band in (getattr(self.template, "data_bands", None) or []):
-                if not getattr(t_band, "enabled", True):
-                    continue
-                k = getattr(t_band, "key", "").lower().replace("-", "_").replace(" ", "_")
-                lbl = getattr(t_band, "label", None) or getattr(t_band, "title", None) or k
-                mapped_id = _resolve_band_id(k, lbl)
-                if mapped_id in cand_dict:
-                    b_info = dict(cand_dict[mapped_id])
-                    if lbl:
-                        b_info["label"] = lbl
-                    h_mm = getattr(t_band, "height_mm", None) or getattr(t_band, "heightMm", None)
-                    if h_mm and float(h_mm) > 0:
-                        b_info["height_mm"] = float(h_mm)
-                    if b_info["available"]:
-                        ordered_bands.append(b_info)
-            active_bands = ordered_bands
+        chainages, egl, fl, prl, cf, efl, erl, diff = self._prepare_band_arrays(
+            chainages, egl, fl, profile_df=profile_df
+        )
+        active_bands = self.resolve_active_bands(
+            chainages=chainages,
+            egl=egl,
+            fl=fl,
+            vip_df=vip_df,
+            ip_df=ip_df,
+            profile_df=profile_df,
+        )
 
         num_rows = len(active_bands)
         if num_rows == 0:
@@ -2468,6 +2501,17 @@ class ESPDrawer:
                             km_val=km_val,
                             layer="CHAINAGE",
                         )
+            elif b_id == "custom":
+                self._draw_custom_band_values(
+                    msp=msp,
+                    chainages=chainages,
+                    profile_df=profile_df,
+                    source_col=band["source_col"],
+                    origin_x=origin_x,
+                    row_center_y=row_cy,
+                    color=band["color"],
+                    start_ch=start_ch,
+                )
 
 
 
@@ -3462,8 +3506,8 @@ class ESPDrawer:
 
                     heading = math.atan2(py2 - py1, px2 - px1)
                     return px1, py1, heading
-                except Exception:
-                    pass
+                except Exception as tpl_err:
+                    self.logger.warning("Failed to validate LSectionSheetTemplate: %s", tpl_err)
             x_p = origin_x + (ch_m - start_ch) * scale_factor
             return x_p, origin_y, 0.0
 

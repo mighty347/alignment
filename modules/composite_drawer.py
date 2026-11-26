@@ -150,7 +150,7 @@ class CompositeDrawer:
         # Specialized sub-drawers
         self.plan_drawer = PlanDrawer(self.config)
         self.lsection_drawer = LSectionDrawer(self.config)
-        self.esp_drawer = ESPDrawer(self.config)
+        self.esp_drawer = ESPDrawer(self.config, template=self.template)
 
     def _setup_composite_document(self) -> tuple[ezdxf.document.Drawing, Any]:
         """Create and initialize a standard AutoCAD DXF document with all required layers."""
@@ -518,23 +518,22 @@ class CompositeDrawer:
                     plv = self.template.plan_viewport
 
                     true_len_mm = (draw_length_m / self.h_scale) * 1000.0 if (self.h_scale > 0 and draw_length_m > 0) else 1000.0
-                    avail_extra = sheet_width - (2.0 * margin_sheet) - sidebar_gap - true_len_mm
-                    if avail_extra >= 60.0 and avail_extra < (label_width + sidebar_width):
-                        # Strict A0 fit at true horizontal scale: compact left label column & right sidebar
-                        label_width = round(min(label_width, max(45.0, avail_extra * 0.315)), 2)
-                        sidebar_width = round(max(80.0, avail_extra - label_width), 2)
-                        origin_x = margin_sheet + label_width
-                        draw_len_mm = true_len_mm
-                        sidebar_x0 = origin_x + draw_len_mm + sidebar_gap
-                        sidebar_x1 = sheet_width - margin_sheet
-                    else:
-                        origin_x = max(float(pv.x), margin_sheet + label_width)
-                        sidebar_x0 = sheet_width - sidebar_width - margin_sheet
-                        sidebar_x1 = sheet_width - margin_sheet
-                        draw_len_mm = max(100.0, min(true_len_mm, sidebar_x0 - sidebar_gap - origin_x))
+                    origin_x = max(float(pv.x), margin_sheet + label_width)
+                    draw_len_mm = max(100.0, true_len_mm)
+                    sidebar_x0 = max(sheet_width - sidebar_width - margin_sheet, origin_x + draw_len_mm + sidebar_gap)
+                    sidebar_x1 = sidebar_x0 + sidebar_width
+                    sheet_width = sidebar_x1 + margin_sheet
 
-                    num_data_rows = len(self.template.get_enabled_bands())
-                    data_band_h = self.template.calculate_total_bands_height_mm()
+                    resolved_bands = self.esp_drawer.resolve_active_bands(
+                        chainages=ch_c,
+                        egl=egl_c,
+                        fl=fl_c,
+                        vip_df=vip_c,
+                        ip_df=ip_c,
+                        profile_df=sheet_prof_df,
+                    )
+                    num_data_rows = len(resolved_bands)
+                    data_band_h = sum(float(b.get("height_mm", row_height)) for b in resolved_bands)
                     data_origin_y = margin_bot + data_band_h
                     profile_origin_y = data_origin_y
                     profile_top_y = profile_origin_y + pv.h

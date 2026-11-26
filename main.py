@@ -124,7 +124,6 @@ def root():
         "service": "Railway Alignment, DTM & Greenfield Composite Service",
         "version": "1.0.0",
         "endpoints": [
-            "POST /detect",
             "POST /api/v1/alignment-studio/detect",
             "POST /api/v1/alignment-studio/vertical/generate-formation",
             "GET  /api/v1/greenfield/composite/preview/{version_id}",

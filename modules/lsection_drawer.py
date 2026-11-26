@@ -96,30 +96,19 @@ class LSectionDrawer:
         # Vertical constants
         self.track_buildup_m: float = float(config.get("validation", {}).get("track_buildup_m", 0.762))
 
-        # Band layout dimensions (paper mm) - dynamic from config or RDSO defaults
+        # Band layout dimensions (paper mm) - strictly from config (no hardcoded fallback)
         custom_bands = drawing_cfg.get("profile_bands") or drawing_cfg.get("bands")
+        self.band_names: list[tuple[str, float]] = []
         if custom_bands and isinstance(custom_bands, list):
-            self.band_names = []
             for item in custom_bands:
                 if isinstance(item, (list, tuple)) and len(item) == 2:
                     self.band_names.append((str(item[0]), float(item[1])))
                 elif isinstance(item, dict):
+                    if not item.get("enabled", True):
+                        continue
                     name = str(item.get("name", item.get("title", item.get("label", ""))))
                     h = float(item.get("height_mm", item.get("height", 18.0)))
                     self.band_names.append((name, h))
-        else:
-            self.band_names = [
-                ("VERTICAL GEOMETRY", float(drawing_cfg.get("vgeom_band_height_mm", 24.0))),
-                ("HORIZONTAL GEOMETRY", float(drawing_cfg.get("hgeom_band_height_mm", 24.0))),
-                ("CUT (-) / FILL (+)", float(drawing_cfg.get("cutfill_band_height_mm", 18.0))),
-                ("DIFF PRL & ERL", float(drawing_cfg.get("diff_prl_erl_band_height_mm", 18.0))),
-                ("PROP RAIL LEVEL", float(drawing_cfg.get("prl_band_height_mm", 22.0))),
-                ("PROP. FORMATION LEVEL", float(drawing_cfg.get("pfl_band_height_mm", 22.0))),
-                ("EX RAIL LEVEL", float(drawing_cfg.get("erl_band_height_mm", 18.0))),
-                ("EX. FORMATION LEVEL", float(drawing_cfg.get("efl_band_height_mm", 18.0))),
-                ("GROUND LEVEL", float(drawing_cfg.get("egl_band_height_mm", 22.0))),
-                ("CHAINAGE (m)", float(drawing_cfg.get("chainage_band_height_mm", 18.0))),
-            ]
         self.total_bands_height_mm = sum(h for _, h in self.band_names)
 
         # Sheet layout constants (A0 Sheet: 1189 x 841 mm)
@@ -431,10 +420,11 @@ class LSectionDrawer:
         topo_res: Optional[Any] = None,
         bridge_df: Optional[Any] = None,
         align_res: Optional[Any] = None,
+        template: Optional[Any] = None,
     ) -> None:
-        """Render the 10-Band Profile & Elevation View onto the bottom section of a shared composite DXF sheet."""
+        """Render the Profile & Data Bands onto the bottom section of a shared composite DXF sheet."""
         from modules.esp_drawer import ESPDrawer
-        esp_dr = ESPDrawer(self.config)
+        esp_dr = ESPDrawer(self.config, template=template)
 
         # 1. Profile View (EGL, PFL, Datum, 10m Blue earth fill lines)
         esp_dr._draw_profile_view(

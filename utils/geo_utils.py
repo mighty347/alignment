@@ -20,7 +20,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 # Auto-configure GDAL_DATA and PROJ_LIB for Windows conda envs
 if "GDAL_DATA" not in os.environ:

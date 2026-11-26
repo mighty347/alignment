@@ -216,16 +216,6 @@ def test_generate_and_poll_standalone_service(
         def save_generated_sheets(
             self,
             version_id: str,
-            sheets: list[Any],
-            master_dxf_url: Optional[str] = None,
-            version_status: Optional[str] = None,
-            updated_by: Optional[str] = None,
-        ) -> list[str]:
-            return [str(uuid.uuid4()) for _ in sheets]
-
-        def save_generated_sheets(
-            self,
-            version_id: str,
             sheets: list[SheetWriteRecord],
             master_dxf_url: Optional[str] = None,
             version_status: Optional[str] = None,

@@ -592,8 +592,11 @@ def _execute_greenfield_composite_job(
             except Exception as tpl_ex:
                 logger.warning("Failed to fetch template '%s': %s", tpl_id, tpl_ex)
 
-        # Inject user custom bands or survey Excel headers if provided
-        user_bands = payload.custom_bands or bundle.version_meta.band_headers
+        # Priority: explicit payload.custom_bands > existing template_db data_bands > Excel version band_headers
+        user_bands = payload.custom_bands
+        if not user_bands and active_template and not active_template.data_bands:
+            user_bands = bundle.version_meta.band_headers
+
         if user_bands and active_template:
             from template_models import DataBandItem
             new_bands: list[DataBandItem] = []

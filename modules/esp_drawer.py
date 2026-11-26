@@ -113,7 +113,7 @@ class ESPDrawer:
     COL_GREY   = 8   # dark grey — grid lines
     COL_BLACK  = 7   # ACI 7 maps to pure solid black (0,0,0) on white paper in ezdxf
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], template: Optional[Any] = None) -> None:
         self.config = config
         self.logger = get_logger(self.__class__.__name__)
         self.logger.info("Initialized %s", self.__class__.__name__)
@@ -143,7 +143,7 @@ class ESPDrawer:
 
         # Resolve dynamic template if provided
         self.template = None
-        raw_tpl = config.get("template") or config.get("lsection_template")
+        raw_tpl = template or config.get("template") or config.get("lsection_template")
         if raw_tpl is not None:
             if hasattr(raw_tpl, "data_bands"):
                 self.template = raw_tpl
@@ -1045,7 +1045,8 @@ class ESPDrawer:
             if br_path_cfg:
                 br_path = Path(br_path_cfg)
                 if not br_path.is_absolute():
-                    for base in [_PROJECT_ROOT, _PROJECT_ROOT.parent]:
+                    project_root = Path(__file__).resolve().parents[1]
+                    for base in [project_root, project_root.parent]:
                         if (base / br_path).exists():
                             br_path = (base / br_path).resolve()
                             break
@@ -2280,8 +2281,8 @@ class ESPDrawer:
 
         active_bands = [b for b in candidate_bands if b["available"]]
 
-        # ── Map dynamic data bands from template if present ──
-        if self.template and getattr(self.template, "data_bands", None):
+        # ── Map dynamic data bands strictly from template when provided (no fallback) ──
+        if self.template is not None:
             def _resolve_band_id(k_str: str, lbl_str: str) -> str:
                 s = f"{k_str} {lbl_str}".lower()
                 if any(x in s for x in ["diff", "dif."]):
@@ -2334,7 +2335,7 @@ class ESPDrawer:
 
             cand_dict = {b["id"]: b for b in candidate_bands}
             ordered_bands = []
-            for t_band in self.template.data_bands:
+            for t_band in (getattr(self.template, "data_bands", None) or []):
                 if not getattr(t_band, "enabled", True):
                     continue
                 k = getattr(t_band, "key", "").lower().replace("-", "_").replace(" ", "_")
@@ -2349,8 +2350,7 @@ class ESPDrawer:
                         b_info["height_mm"] = float(h_mm)
                     if b_info["available"]:
                         ordered_bands.append(b_info)
-            if ordered_bands:
-                active_bands = ordered_bands
+            active_bands = ordered_bands
 
         num_rows = len(active_bands)
         if num_rows == 0:
@@ -2823,23 +2823,6 @@ class ESPDrawer:
                     "total_length_m": total_length_m,
                     "sheets": sheets_meta,
                 },
-            )
-
-        except Exception as exc:
-            self.logger.error("L-Section DXF/PDF generation failed: %s", exc)
-            raise ESPDrawerError(f"DXF/PDF generation failed: {exc}") from exc
-
-
-            self.logger.info("L-Section DXF & PDF Generation complete: %s, %s", dxf_out, pdf_out)
-            return ESPResult(
-                dxf_path=dxf_out,
-                metadata={
-                    "pdf_path":        pdf_out,
-                    "paper_length_mm": sheet_width,
-                    "paper_height_mm": sheet_height,
-                    "datum_elev_m":    datum_elev,
-                    "total_length_m":  total_length_m,
-                }
             )
 
         except Exception as exc:
@@ -5036,15 +5019,25 @@ class ESPDrawer:
 
         # ── Draw Building Infringements (as orange hatched squares) ────────
         if infringements_df is not None and not infringements_df.empty:
+            infr_color = int(callout_cfg.get("color_infringement", 30))
             for _, row in infringements_df.iterrows():
                 ch     = float(row.get("chainage_m", 0.0))
                 offset = float(row.get("offset_m",   10.0))   # metres from centreline
                 if not (start_ch - 10.0 <= ch <= start_ch + draw_length_m + 10.0):
                     continue
 
-                px, py = _project_structure(ch, offset)
+                if get_paper_pos is not None:
+                    base_x, base_y, heading = get_paper_pos(ch)
+                else:
+                    base_x = origin_x + (ch - start_ch) * scale_mm_per_m
+                    base_y = plan_origin_y
+                    heading = 0.0
+                perp_angle = heading + math.pi / 2.0
+                perp_mm = offset * scale_mm_per_m
+                px = base_x + perp_mm * math.cos(perp_angle)
+                py = base_y + perp_mm * math.sin(perp_angle)
                 sz = 3.0  # symbol size in mm
-                hatch = msp.add_hatch(color=INFR_COLOR)
+                hatch = msp.add_hatch(color=infr_color)
                 hatch.paths.add_polyline_path(
                     [(px - sz/2, py - sz/2), (px + sz/2, py - sz/2),
                      (px + sz/2, py + sz/2), (px - sz/2, py + sz/2)],
@@ -5054,7 +5047,7 @@ class ESPDrawer:
                     [(px - sz/2, py - sz/2), (px + sz/2, py - sz/2),
                      (px + sz/2, py + sz/2), (px - sz/2, py + sz/2),
                      (px - sz/2, py - sz/2)],
-                    dxfattribs={"layer": "STRUCTURES_PLAN", "color": INFR_COLOR, "lineweight": 9}
+                    dxfattribs={"layer": "STRUCTURES_PLAN", "color": infr_color, "lineweight": 9}
                 )
 
     def _draw_plan_structure_and_turnout_callouts(

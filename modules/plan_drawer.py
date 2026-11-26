@@ -2327,26 +2327,6 @@ class PlanDrawer:
             #     anno_scale=anno_scale,
             # )
 
-        # Define track/station to paper position mapping for callout annotations
-        def get_paper_pos(ch_m: float) -> tuple[float, float, float]:
-            s = min(float(reconstructed_line.length), max(0.0, ch_m))
-            pt = reconstructed_line.interpolate(s)
-            u = (pt.x - p_start.x) * cos_t + (pt.y - p_start.y) * sin_t
-            v = -(pt.x - p_start.x) * sin_t + (pt.y - p_start.y) * cos_t
-            px = origin_x + u
-            py = origin_y + v
-            ds = 0.5
-            s_bwd = max(0.0, s - ds)
-            s_fwd = min(float(reconstructed_line.length), s + ds)
-            pt_b = reconstructed_line.interpolate(s_bwd)
-            pt_f = reconstructed_line.interpolate(s_fwd)
-            dx = pt_f.x - pt_b.x
-            dy = pt_f.y - pt_b.y
-            u_fwd = dx * cos_t + dy * sin_t
-            v_fwd = -dx * sin_t + dy * cos_t
-            heading = math.atan2(v_fwd, u_fwd) if (abs(u_fwd) > 1e-6 or abs(v_fwd) > 1e-6) else 0.0
-            return px, py, heading
-
         # Unified Spatial Text Collision Manager for this sheet
         collision_mgr = PlanTextCollisionManager(buffer_padding=0.25 * anno_scale)
 

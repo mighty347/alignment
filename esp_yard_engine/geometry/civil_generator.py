@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 import math
-import math
 from typing import Any, Optional
 
 from esp_yard_engine.models.yard_schema import (

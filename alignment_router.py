@@ -344,7 +344,6 @@ def _detect(
 # ------------------------------------------------------------------------------
 # Endpoint: /detect (Horizontal Alignment PI & Curve Detection)
 # ------------------------------------------------------------------------------
-@router.post("/detect", response_model=PlanProfileResponse, status_code=status.HTTP_200_OK)
 @router.post("/api/v1/alignment-studio/detect", response_model=PlanProfileResponse, status_code=status.HTTP_200_OK)
 async def detect_alignment(
     file: UploadFile = File(...),

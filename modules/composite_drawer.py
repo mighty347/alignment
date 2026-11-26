@@ -533,8 +533,8 @@ class CompositeDrawer:
                         sidebar_x1 = sheet_width - margin_sheet
                         draw_len_mm = max(100.0, min(true_len_mm, sidebar_x0 - sidebar_gap - origin_x))
 
-                    num_data_rows = len(self.template.get_enabled_bands()) if self.template.data_bands else 10
-                    data_band_h = self.template.calculate_total_bands_height_mm() if self.template.data_bands else (num_data_rows * row_height)
+                    num_data_rows = len(self.template.get_enabled_bands())
+                    data_band_h = self.template.calculate_total_bands_height_mm()
                     data_origin_y = margin_bot + data_band_h
                     profile_origin_y = data_origin_y
                     profile_top_y = profile_origin_y + pv.h
@@ -557,9 +557,9 @@ class CompositeDrawer:
                     sidebar_x1 = sidebar_x0 + sidebar_width
                     sheet_width = sidebar_x1 + margin_sheet
 
-                    num_data_rows = 10
-                    data_band_h = num_data_rows * row_height        # 180.0 mm
-                    profile_area_h = 120.0                          # 120.0 mm
+                    num_data_rows = len(getattr(self.lsection_drawer, "band_names", []))
+                    data_band_h = float(getattr(self.lsection_drawer, "total_bands_height_mm", 0.0))
+                    profile_area_h = float(self.config.get("drawing", {}).get("profile_area_height_mm", 120.0))
 
                     data_origin_y = margin_bot + data_band_h        # 192.0 mm
                     profile_origin_y = data_origin_y                # 192.0 mm
@@ -612,6 +612,7 @@ class CompositeDrawer:
                     topo_res=topo_res,
                     bridge_df=bridge_df,
                     align_res=align_res,
+                    template=self.template,
                 )
 
                 # Determine alignment EPSG CRS
@@ -833,289 +834,10 @@ class CompositeDrawer:
             dxfattribs={"layer": "BORDER", "color": sb_color, "lineweight": sb_lineweight},
         )
 
-        # If template has custom sidebar.boxes, render them directly
+        # Render sidebar boxes from template_db when present; if empty, keep only the sidebar panel frame
         custom_boxes = self._extract_sidebar_boxes()
         if custom_boxes:
             self._draw_sidebar_from_boxes(msp, custom_boxes, x0, x1, y0, y1, sb_color)
-            return
-
-        notes_cfg = self.config.get("drawing", {}).get("sidebar_notes", {})
-        if not notes_cfg.get("enabled", True):
-            return
-
-        # ── 2. Inner Frame & Geometry Coordinates ────────────────────────────
-        pad_edge = 3.0
-        bx0 = x0 + pad_edge
-        bx1 = x1 - pad_edge
-        tx = bx0 + 3.5  # Text left margin (~6.5 mm inside outer border)
-
-        # ── 3. AUTHORITY OF WORKS Sub-Box ─────────────────────────────────────
-        aow_top_y = y1 - pad_edge
-        aow_h = 27.0
-        aow_bot_y = aow_top_y - aow_h
-
-        # Frame for Authority of Works
-        msp.add_lwpolyline(
-            [(bx0, aow_top_y), (bx1, aow_top_y), (bx1, aow_bot_y), (bx0, aow_bot_y), (bx0, aow_top_y)],
-            dxfattribs={"layer": "BORDER", "color": sb_color, "lineweight": 25},
-        )
-
-        # Title: AUTHORITY OF WORKS
-        y_aow_title = aow_top_y - 5.0
-        t_aow = msp.add_text(
-            "AUTHORITY OF WORKS",
-            dxfattribs={
-                "height": 3.2,
-                "layer": "TITLE_BLOCK",
-                "style": "ESP_STYLE",
-                "color": self.COL_BLACK,
-            },
-        )
-        t_aow.set_placement((tx, y_aow_title), align=TextEntityAlignment.BOTTOM_LEFT)
-
-        # Underline under AUTHORITY OF WORKS
-        aow_title_len = 48.0
-        msp.add_line(
-            (tx, y_aow_title - 0.8),
-            (tx + aow_title_len, y_aow_title - 0.8),
-            dxfattribs={"layer": "TITLE_BLOCK", "color": self.COL_BLACK, "lineweight": 18},
-        )
-
-        # Dynamic Project Metadata
-        proj_cfg = self.config.get("project", {})
-        pb_val = str(proj_cfg.get("pink_book_no", "") or "").strip()
-        item_val = str(proj_cfg.get("item_no", "") or "").strip()
-        proj_val = str(proj_cfg.get("project_id", "") or "").strip()
-
-        row_h = 4.8
-        y_r1 = y_aow_title - 1.5 - row_h
-        y_r2 = y_r1 - row_h
-        y_r3 = y_r2 - row_h
-
-        msp.add_text(
-            f"PINK BOOK NO.:-  {pb_val}" if pb_val else "PINK BOOK NO.:-",
-            dxfattribs={"height": 2.6, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": self.COL_BLACK},
-        ).set_placement((tx, y_r1), align=TextEntityAlignment.BOTTOM_LEFT)
-
-        msp.add_text(
-            f"ITEM NO.         :-  {item_val}" if item_val else "ITEM NO.         :-",
-            dxfattribs={"height": 2.6, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": self.COL_BLACK},
-        ).set_placement((tx, y_r2), align=TextEntityAlignment.BOTTOM_LEFT)
-
-        msp.add_text(
-            f"PROJECT ID      :-  {proj_val}" if proj_val else "PROJECT ID      :-",
-            dxfattribs={"height": 2.6, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": self.COL_BLACK},
-        ).set_placement((tx, y_r3), align=TextEntityAlignment.BOTTOM_LEFT)
-
-        # ── 4. NOTES : Header ────────────────────────────────────────────────
-        y_curr = aow_bot_y - 7.0
-
-        t_notes = msp.add_text(
-            "NOTES :",
-            dxfattribs={
-                "height": 3.2,
-                "layer": "TITLE_BLOCK",
-                "style": "ESP_STYLE",
-                "color": self.COL_BLACK,
-            },
-        )
-        t_notes.set_placement((tx, y_curr), align=TextEntityAlignment.BOTTOM_LEFT)
-
-        msp.add_line(
-            (tx, y_curr - 0.8),
-            (tx + 18.0, y_curr - 0.8),
-            dxfattribs={"layer": "TITLE_BLOCK", "color": self.COL_BLACK, "lineweight": 18},
-        )
-        y_curr -= 6.0
-
-        # ── 5. Dynamic Notes Generation ──────────────────────────────────────
-        note_text_h = float(notes_cfg.get("text_height_mm", 2.6))
-        line_spacing = float(notes_cfg.get("line_spacing_mm", 4.2))
-
-        # Dynamic values resolution
-        # Ruling Gradient
-        ruling_disp = str(notes_cfg.get("ruling_gradient_display", "") or "").strip()
-        if not ruling_disp:
-            rg_val = float(self.config.get("vertical", {}).get("ruling_gradient", 0.006667))
-            rg_ratio = round(1.0 / rg_val) if rg_val > 0 else 150
-            ruling_disp = f"1 IN {rg_ratio}"
-
-        # Origin station and chainage
-        stn = str(notes_cfg.get("origin_station", "KANTI")).strip().upper()
-        stn_ch = float(notes_cfg.get("origin_chainage_m", 0.0))
-
-        # Speed
-        spd = int(self.config.get("railway", {}).get("design_speed", 160))
-
-        # IR Code correction date
-        ir_date = str(notes_cfg.get("ir_code_correction_date", "27.04.2022")).strip()
-
-        # VC criteria
-        vc_crit = str(notes_cfg.get("vc_threshold_text", "4MM PER METER OR 0.4PERCENT")).strip()
-
-        # Build list of notes (Use template clauses if configured, else default RDSO list)
-        tpl_clauses = None
-        if self.template and getattr(self.template, "sidebar", None):
-            sb = self.template.sidebar
-            if getattr(sb, "notes", None) and getattr(sb.notes, "clauses", None):
-                tpl_clauses = sb.notes.clauses
-
-        if tpl_clauses:
-            notes_list: list[tuple[int, str]] = []
-            import re
-            for idx, clause in enumerate(tpl_clauses, start=1):
-                clean_clause = str(clause).strip()
-                clean_clause = re.sub(r"^\d+\.\s*", "", clean_clause)
-                notes_list.append((idx, clean_clause))
-        else:
-            notes_list: list[tuple[int, str]] = [
-                (1, "PROPOSED WORK SHOWN IN RED."),
-                (2, "ALL DIMENSIONS SHOWN IN METER, UNLESS OTHER WISE SPECIFIED."),
-                (3, f"RULING GRADIENT OF THE SECTION HAS BEEN KEPT AS {ruling_disp}."),
-                (4, "ALL THE CURVE IN DIAGRAM HAS BEEN SHOWN BY INCORPORATING GRADE COMPENSATION."),
-                (5, f"THIS DRAWING IS BASED ON SCALE AS PER IR ENGG. CODE 1982 CORRECTED UP TO {ir_date}."),
-                (6, f"ALL CHAINAGE TAKEN FROM {stn} CONSIDERING {stn} STATION BUILDING CH:{stn_ch:.1f}."),
-                (7, f"PROPOSED TRACK IS FIT FOR {spd} KMPH SPEED."),
-                (8, f"TRL OF ALL THE PROPOSED CURVE HAS BEEN DESIGN FOR {spd}KMPH."),
-                (9, "IT IS CERTIFIED THAT THE BED LEVEL OF PROPOSED LHS/RUB LIES ABOVE THE OBSERVED WATER LEVEL OF SITE."),
-                (10, "NO PSR WILL BE IMPOSED IN THE SECTION ON ACCOUNT OF PROPOSED WORK ."),
-                (11, f"VERTICAL CURVE HAS BEEN PROVIDED WHERE ALGEBRIC DIFFERENCE BETWEEN THE GRADES GREATER THAN {vc_crit}."),
-            ]
-
-        wrap_width = 68  # Characters before wrapping to fit ~138mm printable width
-
-        for note_num, note_content in notes_list:
-            prefix = f"{note_num}. " if note_num < 10 else f"{note_num}."
-            full_text = f"{prefix}{note_content}"
-            wrapped_lines = textwrap.wrap(full_text, width=wrap_width, subsequent_indent="   ")
-
-            if note_num == 1:
-                # Special styling: "RED." rendered in ACI 1 (Red)
-                first_line = wrapped_lines[0]
-                if "RED." in first_line:
-                    idx = first_line.index("RED.")
-                    part_before = first_line[:idx]
-                    # Preceding text in standard text color (black/white)
-                    msp.add_text(
-                        part_before,
-                        dxfattribs={
-                            "height": note_text_h,
-                            "layer": "TITLE_BLOCK",
-                            "style": "ESP_STYLE",
-                            "color": self.COL_BLACK,
-                        },
-                    ).set_placement((tx, y_curr), align=TextEntityAlignment.BOTTOM_LEFT)
-
-                    offset_x = len(part_before) * (note_text_h * 0.65)
-                    msp.add_text(
-                        "RED.",
-                        dxfattribs={
-                            "height": note_text_h,
-                            "layer": "TITLE_BLOCK",
-                            "style": "ESP_STYLE",
-                            "color": self.COL_RED,
-                        },
-                    ).set_placement((tx + offset_x, y_curr), align=TextEntityAlignment.BOTTOM_LEFT)
-                else:
-                    msp.add_text(
-                        first_line,
-                        dxfattribs={
-                            "height": note_text_h,
-                            "layer": "TITLE_BLOCK",
-                            "style": "ESP_STYLE",
-                            "color": self.COL_BLACK,
-                        },
-                    ).set_placement((tx, y_curr), align=TextEntityAlignment.BOTTOM_LEFT)
-                y_curr -= line_spacing
-                for sub_line in wrapped_lines[1:]:
-                    msp.add_text(
-                        sub_line,
-                        dxfattribs={
-                            "height": note_text_h,
-                            "layer": "TITLE_BLOCK",
-                            "style": "ESP_STYLE",
-                            "color": self.COL_BLACK,
-                        },
-                    ).set_placement((tx, y_curr), align=TextEntityAlignment.BOTTOM_LEFT)
-                    y_curr -= line_spacing
-            else:
-                for line in wrapped_lines:
-                    msp.add_text(
-                        line,
-                        dxfattribs={
-                            "height": note_text_h,
-                            "layer": "TITLE_BLOCK",
-                            "style": "ESP_STYLE",
-                            "color": self.COL_BLACK,
-                        },
-                    ).set_placement((tx, y_curr), align=TextEntityAlignment.BOTTOM_LEFT)
-                    y_curr -= line_spacing
-
-            # Extra breathing space between notes
-            y_curr -= 1.0
-
-        # ── 6. Official Title Block Compartment (Bottom of Sidebar) ──────────
-        tb_h = 56.0
-        tb_bot_y = y0 + pad_edge
-        tb_top_y = tb_bot_y + tb_h
-
-        msp.add_lwpolyline(
-            [(bx0, tb_bot_y), (bx1, tb_bot_y), (bx1, tb_top_y), (bx0, tb_top_y), (bx0, tb_bot_y)],
-            dxfattribs={"layer": "TITLE_BLOCK", "color": self.COL_BLACK, "lineweight": 25},
-        )
-
-        banner_h = 13.0
-        banner_div_y = tb_top_y - banner_h
-        msp.add_line(
-            (bx0, banner_div_y),
-            (bx1, banner_div_y),
-            dxfattribs={"layer": "TITLE_BLOCK", "color": self.COL_BLACK, "lineweight": 18},
-        )
-
-        tpl_tb = None
-        if self.template and getattr(self.template, "sidebar", None):
-            tpl_tb = getattr(self.template.sidebar, "title_block", None)
-
-        zonal_name = str(
-            getattr(tpl_tb, "zonal_railway", None)
-            or self.config.get("project", {}).get("zone", "SOUTH CENTRAL RAILWAY")
-        ).upper()
-        msp.add_text(
-            f"INDIAN RAILWAYS — {zonal_name}",
-            dxfattribs={"height": 3.4, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": self.COL_RED},
-        ).set_placement(((bx0 + bx1) / 2.0, (tb_top_y + banner_div_y) / 2.0), align=TextEntityAlignment.MIDDLE_CENTER)
-
-        proj_name = str(
-            getattr(tpl_tb, "project_name", None)
-            or self.config.get("project", {}).get("name", "NEW BROAD GAUGE RAILWAY LINE")
-        ).upper()
-        div_name = str(
-            getattr(tpl_tb, "division", None)
-            or self.config.get("project", {}).get("division", "HEADQUARTERS")
-        ).upper()
-        plan_title = str(
-            getattr(tpl_tb, "drawing_title", None)
-            or self.config.get("templates", {})
-            .get("greenfield", {})
-            .get("title_block", {})
-            .get("plan_title", "WORKING PLAN AND LONGITUDINAL SECTION")
-        ).upper()
-
-        tb_items = [
-            f"PROJECT  : {proj_name}",
-            f"DIVISION : {div_name}",
-            f"TITLE    : {plan_title}",
-            f"SHEET NO : {sheet_index} OF {total_sheets} (KM {start_ch/1000.0:.2f} TO KM {end_ch/1000.0:.2f})",
-            f"SCALES   : PLAN 1:{int(self.plan_scale)} | PROF H:1:{int(self.h_scale)}, V:1:{int(self.v_scale)}",
-            f"NOTE     : FOR STATION YARDS & TURNOUTS REFER TO APPROVED STATION ESP",
-        ]
-        for idx, row_text in enumerate(tb_items):
-            row_y = banner_div_y - 4.2 - (idx * 5.2)
-            r_color = self.COL_RED if ("TITLE" in row_text or "NOTE" in row_text) else self.COL_BLACK
-            msp.add_text(
-                row_text,
-                dxfattribs={"height": 2.2, "layer": "TITLE_BLOCK", "style": "ESP_STYLE", "color": r_color},
-            ).set_placement((tx, row_y), align=TextEntityAlignment.MIDDLE_LEFT)
 
     @staticmethod
     def _strip_markup(raw_text: str) -> str:

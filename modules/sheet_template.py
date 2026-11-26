@@ -44,6 +44,46 @@ from utils.geo_utils import format_chainage
 logger = get_logger("SheetTemplate")
 
 
+def _require_cfg(mapping: dict[str, Any], key: str, context: str) -> Any:
+    """Return required key from a config mapping or raise ValueError."""
+    if not isinstance(mapping, dict) or key not in mapping or mapping[key] is None:
+        raise ValueError(f"Missing required config key '{key}' in {context}.")
+    return mapping[key]
+
+
+def _require_any_cfg(mappings: Sequence[dict[str, Any]], keys: Sequence[str], context: str) -> Any:
+    """Return the first present non-None value across candidate mappings and keys."""
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        for key in keys:
+            if key in mapping and mapping[key] is not None:
+                return mapping[key]
+    raise ValueError(f"Missing required config key (one of {list(keys)}) in {context}.")
+
+
+_ACI_COLOR_MAP: dict[str, int] = {
+    "RED": 1,
+    "YELLOW": 2,
+    "GREEN": 3,
+    "CYAN": 4,
+    "BLUE": 5,
+    "MAGENTA": 6,
+    "WHITE": 7,
+    "BLACK": 7,
+}
+
+
+def _resolve_aci_color(value: Any) -> int:
+    """Convert an integer or standard CAD color name to an AutoCAD Color Index."""
+    if isinstance(value, int):
+        return value
+    name = str(value).strip().upper()
+    if name in _ACI_COLOR_MAP:
+        return _ACI_COLOR_MAP[name]
+    return int(value)
+
+
 @dataclass
 class BoundingBox:
     """Represents a 2D Cartesian rectangular bounding box in sheet millimeters or model units."""
@@ -368,63 +408,49 @@ class SheetTemplate:
         line_type: str = "2nd_line",
         custom_bands: Optional[list[dict[str, Any]]] = None,
     ) -> SheetTemplate:
-        """Instantiate a SheetTemplate from configuration dictionary or fallback to RDSO standards."""
-        if config is None:
-            config_path = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
-            if config_path.exists():
-                import yaml
-                try:
-                    with open(config_path, "r", encoding="utf-8") as f:
-                        cfg = yaml.safe_load(f) or {}
-                except Exception as exc:
-                    logger.warning("Failed to load config.yaml: %s", exc)
-                    cfg = {}
-            else:
-                cfg = {}
-        else:
-            cfg = config
+        """Instantiate a SheetTemplate strictly from the provided configuration dictionary."""
+        if not isinstance(config, dict) or not config:
+            raise ValueError("SheetTemplate.from_config requires a non-empty configuration dictionary.")
+        cfg = config
 
-        templates_cfg = cfg.get("templates", {})
-        t_cfg = templates_cfg.get(template_type, {})
+        templates_cfg = _require_cfg(cfg, "templates", "root config")
+        t_cfg = _require_cfg(templates_cfg, template_type, "templates")
         drawing_cfg = cfg.get("drawing", {})
+        tpl_ctx = f"templates.{template_type}"
 
         # 1. Base Dimensions
-        sheet_w = float(t_cfg.get("sheet_width_mm", drawing_cfg.get("sheet_width_mm", 1189.0)))
-        sheet_h = float(t_cfg.get("sheet_height_mm", drawing_cfg.get("sheet_height_mm", 915.0)))
-        margin = float(t_cfg.get("margin_mm", drawing_cfg.get("margin_mm", 10.0)))
-        sidebar_w = float(t_cfg.get("sidebar_width_mm", drawing_cfg.get("sidebar_width_mm", 153.0 if template_type == "greenfield" else 185.0)))
-        sidebar_gap = float(t_cfg.get("sidebar_gap_mm", 10.0))
-        label_w = float(t_cfg.get("label_width_mm", 80.0))
-        margin_mid = float(t_cfg.get("margin_mid_mm", drawing_cfg.get("margin_mid_mm", 55.0)))
+        sheet_w = float(_require_any_cfg([t_cfg, drawing_cfg], ["sheet_width_mm"], tpl_ctx))
+        sheet_h = float(_require_any_cfg([t_cfg, drawing_cfg], ["sheet_height_mm"], tpl_ctx))
+        margin = float(_require_any_cfg([t_cfg, drawing_cfg], ["margin_mm"], tpl_ctx))
+        sidebar_w = float(_require_any_cfg([t_cfg, drawing_cfg], ["sidebar_width_mm"], tpl_ctx))
+        sidebar_gap = float(_require_any_cfg([t_cfg, drawing_cfg], ["sidebar_gap_mm"], tpl_ctx))
+        label_w = float(_require_any_cfg([t_cfg, drawing_cfg], ["label_width_mm"], tpl_ctx))
+        margin_mid = float(_require_any_cfg([t_cfg, drawing_cfg], ["margin_mid_mm"], tpl_ctx))
 
         # 2. Scales
-        plan_scale = float(t_cfg.get("plan_scale", drawing_cfg.get("plan_scale", 5000.0)))
-        h_scale = float(t_cfg.get("profile_h_scale", drawing_cfg.get("profile_h_scale", 5000.0)))
-        v_scale = float(t_cfg.get("profile_v_scale", drawing_cfg.get("profile_v_scale", 500.0)))
+        plan_scale = float(_require_any_cfg([t_cfg, drawing_cfg], ["plan_scale"], tpl_ctx))
+        h_scale = float(_require_any_cfg([t_cfg, drawing_cfg], ["profile_h_scale"], tpl_ctx))
+        v_scale = float(_require_any_cfg([t_cfg, drawing_cfg], ["profile_v_scale"], tpl_ctx))
 
         # 3. Horizontal partitioning
-        # Inner drawable boundaries
         x_inner_min = margin
         x_inner_max = sheet_w - margin
         y_inner_min = margin
         y_inner_max = sheet_h - margin
 
-        # Right sidebar
         x_sb_min = x_inner_max - sidebar_w
         x_sb_max = x_inner_max
         sidebar_bbox = BoundingBox(x_sb_min, y_inner_min, x_sb_max, y_inner_max)
 
-        # Main corridor width
         x_main_min = x_inner_min
         x_main_max = x_sb_min - sidebar_gap
 
-        # Draw length in paper millimeters
-        corridor_len = max(500.0, float(corridor_length_m))
+        corridor_len = float(corridor_length_m)
+        if not math.isfinite(corridor_len) or corridor_len <= 0.0:
+            raise ValueError(f"corridor_length_m must be finite and positive; got {corridor_length_m!r}.")
         draw_len_mm = (corridor_len / h_scale) * 1000.0
-        # Clamp draw length to fit sheet or allow sheet expansion
         if (x_main_min + label_w + draw_len_mm) > x_main_max:
-            # Expand sheet width dynamically to accommodate full corridor
-            needed_w = (x_main_min + label_w + draw_len_mm + sidebar_gap + sidebar_w + margin)
+            needed_w = x_main_min + label_w + draw_len_mm + sidebar_gap + sidebar_w + margin
             sheet_w = max(sheet_w, needed_w)
             x_inner_max = sheet_w - margin
             x_sb_min = x_inner_max - sidebar_w
@@ -436,8 +462,9 @@ class SheetTemplate:
         x_draw_end = x_draw_start + draw_len_mm
 
         # 4. Vertical partitioning
-        t_prof = t_cfg.get("longitudinal_section", {})
-        band_h = float(t_prof.get("band_row_height_mm", 18.0))
+        t_prof = _require_cfg(t_cfg, "longitudinal_section", tpl_ctx)
+        prof_ctx = f"{tpl_ctx}.longitudinal_section"
+        band_h = float(_require_cfg(t_prof, "band_row_height_mm", prof_ctx))
 
         # Normalize line type: '2nd_line' | '3rd_line' | '4th_line'
         norm_line = str(line_type).strip().lower()
@@ -449,72 +476,43 @@ class SheetTemplate:
             line_key = "3rd_line"
 
         lines_cfg = t_cfg.get("lines", {})
-        line_cfg = lines_cfg.get(line_key, {})
-        line_designation = str(line_cfg.get("designation", "2nd Line" if line_key == "2nd_line" else ("4th Line" if line_key == "4th_line" else "3rd Line")))
-        line_full_title = str(line_cfg.get("full_title", f"PROPOSED {line_designation.upper()}"))
+        line_cfg = lines_cfg.get(line_key, {}) if isinstance(lines_cfg, dict) else {}
+        line_designation = str(line_cfg.get("designation", line_key.replace("_", " ").title()))
 
-        # Parse data bands from custom_bands, config, or fallback to official standards
+        # Parse data bands from custom_bands or config
         raw_bands = custom_bands if (custom_bands and isinstance(custom_bands, list) and len(custom_bands) > 0) else t_prof.get("bands")
+        if not raw_bands or not isinstance(raw_bands, list):
+            raise ValueError(f"Missing required non-empty 'bands' list in {prof_ctx} (or custom_bands).")
+
         band_defs: list[LSectionBandDef] = []
-        if raw_bands and isinstance(raw_bands, list) and len(raw_bands) > 0:
-            for b_dict in raw_bands:
-                if isinstance(b_dict, dict) and not b_dict.get("enabled", True):
-                    continue  # Skip disabled bands!
-                raw_lines = b_dict.get("lines", [b_dict.get("title", "")])
-                if isinstance(raw_lines, str):
-                    raw_lines = [raw_lines]
-                fmt_lines = [
-                    str(ln).replace("{line_designation}", line_designation)
-                    for ln in raw_lines
-                ]
-                b_title = str(b_dict.get("title", "")).replace("{line_designation}", line_designation)
-                band_defs.append(
-                    LSectionBandDef(
-                        title=b_title,
-                        lines=fmt_lines,
-                        height_mm=float(b_dict.get("height_mm", band_h)),
-                        header_color=int(b_dict.get("header_color", 7)),
-                        value_color=int(b_dict.get("value_color", 7)),
-                        field_name=str(b_dict.get("field_name", "generic")),
-                        format_type=str(b_dict.get("format_type", "elevation")),
-                    )
+        for idx, b_dict in enumerate(raw_bands):
+            if not isinstance(b_dict, dict):
+                raise ValueError(f"Band entry at index {idx} in {prof_ctx}.bands must be a mapping.")
+            if not b_dict.get("enabled", True):
+                continue
+            b_ctx = f"{prof_ctx}.bands[{idx}]"
+            b_title = str(_require_cfg(b_dict, "title", b_ctx)).replace("{line_designation}", line_designation)
+            raw_lines = b_dict.get("lines", [b_title])
+            if isinstance(raw_lines, str):
+                raw_lines = [raw_lines]
+            fmt_lines = [str(ln).replace("{line_designation}", line_designation) for ln in raw_lines]
+            band_defs.append(
+                LSectionBandDef(
+                    title=b_title,
+                    lines=fmt_lines,
+                    height_mm=float(b_dict.get("height_mm", band_h)),
+                    header_color=int(_require_cfg(b_dict, "header_color", b_ctx)),
+                    value_color=int(_require_cfg(b_dict, "value_color", b_ctx)),
+                    field_name=str(_require_cfg(b_dict, "field_name", b_ctx)),
+                    format_type=str(b_dict.get("format_type", "elevation")),
                 )
-        else:
-            if template_type == "greenfield":
-                band_defs = [
-                    LSectionBandDef("VERTICAL GEOMETRY", ["VERTICAL GEOMETRY"], 22.0, 1, 1, "vert_geom", "geometry"),
-                    LSectionBandDef("HORIZONTAL GEOMETRY", ["HORIZONTAL GEOMETRY"], 22.0, 4, 4, "horiz_geom", "geometry"),
-                    LSectionBandDef("CUT (-) / FILL (+)", ["CUT (-) / FILL (+)"], 18.0, 1, 1, "cut_fill_m", "signed"),
-                    LSectionBandDef("DIFF PRL & ERL", ["DIFF PRL & ERL"], 18.0, 1, 1, "diff_prl_erl_m", "signed"),
-                    LSectionBandDef("PROP RAIL LEVEL", ["PROP RAIL LEVEL"], 18.0, 1, 1, "prl_m", "elevation"),
-                    LSectionBandDef("PROP. FORMATION LEVEL", ["PROP. FORMATION LEVEL"], 18.0, 1, 1, "pfl_m", "elevation"),
-                    LSectionBandDef("EX RAIL LEVEL", ["EX RAIL LEVEL"], 18.0, 7, 7, "erl_m", "elevation"),
-                    LSectionBandDef("EX. FORMATION LEVEL", ["EX. FORMATION LEVEL"], 18.0, 7, 7, "efl_m", "elevation"),
-                    LSectionBandDef("GROUND LEVEL", ["GROUND LEVEL"], 18.0, 7, 7, "egl_m", "elevation"),
-                    LSectionBandDef("CHAINAGE (m)", ["CHAINAGE (m)"], 18.0, 7, 7, "chainage_m", "chainage"),
-                ]
-            else:
-                band_defs = [
-                    LSectionBandDef("EXT.Alignment", ["EXT.Alignment"], 20.0, 7, 7, "ext_alignment", "geometry"),
-                    LSectionBandDef("PROP.Alignment", ["PROP.Alignment"], 20.0, 1, 1, "prop_alignment", "geometry"),
-                    LSectionBandDef("Gradient of Propose Line", ["Gradient of", "Propose Line"], 18.0, 1, 1, "prop_gradient", "gradient"),
-                    LSectionBandDef("Gradient of Existing Track", ["Gradient of", "Existing Track"], 18.0, 7, 7, "exg_gradient", "gradient"),
-                    LSectionBandDef("Diff.Between Rail levels", ["Diff.Between", "Rail levels"], 18.0, 1, 1, "diff_prl_erl_m", "signed"),
-                    LSectionBandDef("Height Of (+) Bank / (-) Cutting", ["Height Of (+)", "Bank / (-) Cutting"], 18.0, 1, 1, "cut_fill_m", "signed"),
-                    LSectionBandDef("Rail Level of Existing Track (M)", ["Rail Level of", "Existing Track (M)"], 18.0, 7, 7, "erl_m", "elevation"),
-                    LSectionBandDef("Formation Level of Existing Track (M)", ["Formation Level of", "Existing Track (M)"], 18.0, 7, 7, "efl_m", "elevation"),
-                    LSectionBandDef("proposed Rail Level", ["Proposed Rail Level", f"of {line_designation}"], 18.0, 1, 1, "prl_m", "elevation"),
-                    LSectionBandDef("Proposed Formation Level of", ["Proposed Formation", f"Level of {line_designation}"], 18.0, 1, 1, "pfl_m", "elevation"),
-                    LSectionBandDef("Ground Level(M)", ["Ground Level (M)"], 18.0, 7, 7, "egl_m", "elevation"),
-                    LSectionBandDef("Chainage (Km)", ["Chainage (Km)"], 18.0, 7, 7, "chainage_m", "chainage"),
-                    LSectionBandDef("KILOMETRE", ["KILOMETRE"], 18.0, 1, 1, "km_stone", "km_stone"),
-                ]
+            )
 
         total_bands_h = sum(b.height_mm for b in band_defs)
         num_bands = len(band_defs)
 
         # Profile grid
-        prof_grid_h = float(t_prof.get("profile_area_height_mm", 120.0))
+        prof_grid_h = float(_require_cfg(t_prof, "profile_area_height_mm", prof_ctx))
         total_lsection_h = total_bands_h + prof_grid_h
 
         # L-Section Bounding Boxes
@@ -527,27 +525,38 @@ class SheetTemplate:
         y_plan_min = lsection_bbox.y_max + margin_mid
         y_plan_max = y_inner_max
         plan_bbox = BoundingBox(x_main_min, y_plan_min, x_main_max, y_plan_max)
-        plan_header_h = 25.0
+        plan_header_h = float(t_cfg.get("plan_header_height_mm", drawing_cfg.get("plan_header_height_mm", 25.0)))
         plan_header_bbox = BoundingBox(x_main_min, y_plan_max - plan_header_h, x_main_max, y_plan_max)
         plan_corridor_bbox = BoundingBox(x_main_min, y_plan_min, x_main_max, y_plan_max - plan_header_h)
 
         # 5. Build Sub-Sections
-        t_plan = t_cfg.get("plan_view", {})
+        t_plan = _require_cfg(t_cfg, "plan_view", tpl_ctx)
+        plan_ctx = f"{tpl_ctx}.plan_view"
+        tick_interval = float(_require_cfg(t_plan, "chainage_tick_interval_m", plan_ctx))
+        proposed_color = int(_require_any_cfg([t_plan], ["proposed_track_color", "track_color"], plan_ctx))
+        proposed_lw = int(_require_any_cfg([t_plan], ["proposed_track_lineweight", "track_lineweight"], plan_ctx))
+        if template_type == "greenfield":
+            existing_color = int(t_plan.get("existing_track_color", proposed_color))
+            existing_lw = int(t_plan.get("existing_track_lineweight", proposed_lw))
+        else:
+            existing_color = int(_require_cfg(t_plan, "existing_track_color", plan_ctx))
+            existing_lw = int(_require_cfg(t_plan, "existing_track_lineweight", plan_ctx))
+
         plan_view_section = PlanViewSection(
             bbox=plan_bbox,
             header_bbox=plan_header_bbox,
             corridor_bbox=plan_corridor_bbox,
             scale=plan_scale,
             track_mode="single_proposed" if template_type == "greenfield" else "existing_and_proposed",
-            existing_track_color=int(t_plan.get("existing_track_color", 7)),
-            existing_track_lineweight=int(t_plan.get("existing_track_lineweight", 35)),
-            proposed_track_color=int(t_plan.get("proposed_track_color", t_plan.get("track_color", 1))),
-            proposed_track_lineweight=int(t_plan.get("proposed_track_lineweight", t_plan.get("track_lineweight", 50))),
-            chainage_tick_interval_m=float(t_plan.get("chainage_tick_interval_m", 100.0 if template_type == "greenfield" else 20.0)),
-            major_tick_interval_m=float(t_plan.get("major_tick_interval_m", 100.0)),
-            dimension_interval_m=float(t_plan.get("dimension_interval_m", 200.0)),
-            show_topo=bool(t_plan.get("show_topo", True)),
-            show_north_arrow=bool(t_plan.get("show_north_arrow", True)),
+            existing_track_color=existing_color,
+            existing_track_lineweight=existing_lw,
+            proposed_track_color=proposed_color,
+            proposed_track_lineweight=proposed_lw,
+            chainage_tick_interval_m=tick_interval,
+            major_tick_interval_m=float(t_plan.get("major_tick_interval_m", tick_interval)),
+            dimension_interval_m=float(t_plan.get("dimension_interval_m", tick_interval)),
+            show_topo=bool(_require_cfg(t_plan, "show_topo", plan_ctx)),
+            show_north_arrow=bool(_require_cfg(t_plan, "show_north_arrow", plan_ctx)),
         )
 
         lsection_section = LongitudinalSection(
@@ -560,101 +569,74 @@ class SheetTemplate:
             v_scale=v_scale,
             num_bands=num_bands,
             band_row_height_mm=band_h,
-            datum_round_step_m=float(t_prof.get("datum_round_step_m", 5.0)),
-            datum_clearance_m=float(t_prof.get("datum_clearance_m", 20.0)),
+            datum_round_step_m=float(_require_cfg(t_prof, "datum_round_step_m", prof_ctx)),
+            datum_clearance_m=float(_require_cfg(t_prof, "datum_clearance_m", prof_ctx)),
             bands_config=band_defs,
-            station_tick_interval_m=float(t_prof.get("station_tick_interval_m", 20.0)),
-            station_grid_interval_m=float(t_prof.get("station_grid_interval_m", 100.0)),
-            km_interval_m=float(t_prof.get("km_interval_m", 1000.0)),
-            label_text_height_mm=float(t_prof.get("label_text_height_mm", 2.4)),
-            station_text_height_mm=float(t_prof.get("station_text_height_mm", 2.0)),
-            km_text_height_mm=float(t_prof.get("km_text_height_mm", 3.0)),
+            station_tick_interval_m=float(_require_cfg(t_prof, "station_tick_interval_m", prof_ctx)),
+            station_grid_interval_m=float(_require_cfg(t_prof, "station_grid_interval_m", prof_ctx)),
+            km_interval_m=float(_require_cfg(t_prof, "km_interval_m", prof_ctx)),
+            label_text_height_mm=float(_require_cfg(t_prof, "label_text_height_mm", prof_ctx)),
+            station_text_height_mm=float(_require_cfg(t_prof, "station_text_height_mm", prof_ctx)),
+            km_text_height_mm=float(_require_cfg(t_prof, "km_text_height_mm", prof_ctx)),
         )
 
         sidebar_section = SidebarSection(
             bbox=sidebar_bbox,
             width_mm=sidebar_w,
-            color=7,
-            lineweight=35,
+            color=_resolve_aci_color(t_cfg.get("sidebar_color", drawing_cfg.get("sidebar_color", 7))),
+            lineweight=int(t_cfg.get("sidebar_lineweight", drawing_cfg.get("sidebar_lineweight", 35))),
         )
+
         # Populate Notes
-        t_notes = t_cfg.get("notes", {})
-        default_notes = [
-            "1. ALL DIMENSIONS ARE IN METRIC UNITS (METRES / MILLIMETRES).",
-            "2. PROPOSED TRACK IS SHOWN IN CONTINUOUS RED LINE.",
-            "3. RULING GRADIENT ADOPTED IS 1 IN 150 COMPENSATED FOR CURVES.",
-            "4. VERTICAL CURVES ARE PROVIDED WHERE GRADE CHANGE EXCEEDS 4.0 mm/m (0.4%).",
-            "5. PROPOSED FORMATION WIDTH AND SLOPES ARE AS PER RDSO GE:G-0014.",
-            "6. DIFFERENCE BETWEEN FORMATION LEVEL AND RAIL LEVEL (TRACK BUILDUP) IS 0.762m.",
-            "7. RAILWAY LAND BOUNDARY SHOWN IS AS PER LAND ACQUISITION SURVEY.",
-            "8. STRUCTURE DETAILS AND WATERWAYS ARE AS PER APPROVED BRIDGE LIST.",
-        ] if template_type == "greenfield" else [
-            "1. PROPOSALS ARE SHOWN IN RED.",
-            "2. EXISTING TRACK IS SHOWN AS CONTINUOUS WHITE LINE.",
-            "3. DISMANTLING IS SHOWN IN DOTTED.",
-            "4. SURVEY LEVELS ARE SHOWN IN METRIC UNITS (METRES).",
-            "5. THE RAILWAY LAND BOUNDARY INDICATED IN THIS DRAWING IS AS EXISTING ON GROUND. THE CERTIFIED LAND PLANS AVAILABLE IN HQ OR DIVISIONAL OFFICES ARE ONLY THE FINAL AUTHORITY.",
-            str(line_cfg.get("note_6", "6. ALL EXISTING DETAILS SHOWN ARE PERTAINING TO EXG. DN LINE, INCLUDING CURVE DETAILS." if line_key == "2nd_line" else "6. ALL EXISTING DETAILS SHOWN ARE PERTAINING TO EXG. UP AND DN LINES, INCLUDING CURVE DETAILS.")),
-            "7. THE RAIL LEVELS ARE GIVEN IN THIS DRAWING AS PER THE PHYSICAL SURVEY.",
-            str(line_cfg.get("note_8", f"8. THE DIFFERENCE BETWEEN F.L. TO R.L. FOR PROPOSED {line_designation.upper()} FOR 60KG RAILS ON PSC SLEEPERS WITH 350mm BALLAST CUSHION IS 0.762m.")),
-            "9. RULING GRADIENT ADOPTED IS 1 IN 150 (COMPENSATED ON CURVES PER RDSO STANDARDS).",
-            "10. VERTICAL CURVES ARE PROVIDED WHERE GRADE CHANGE EXCEEDS 4.0 mm/m (0.4%).",
-            "11. ON ROUTES WHERE RAIL GRINDING IS IN PRACTICE, TRACK MOUNTED AUTOMATIC GAUGE FACE LUBRICATORS SHOULD BE PROVIDED ON CURVES OF RADIUS 1400 M (1.25°) AND SHARPER AS PER PARA 424(2) OF IRPWM 2020.",
-        ]
-        sidebar_section.notes_section.title = str(t_notes.get("title", "GENERAL NOTES:-" if template_type == "greenfield" else "NOTE:-"))
-        sidebar_section.notes_section.title_color = int(t_notes.get("title_color", 1))
-        raw_notes = t_notes.get("notes_list")
-        if raw_notes and isinstance(raw_notes, list) and len(raw_notes) > 0:
-            notes_to_use = [str(n) for n in raw_notes]
-            if template_type == "brownfield":
-                customized_notes = []
-                for n_str in notes_to_use:
-                    if n_str.startswith("6.") and line_cfg.get("note_6"):
-                        customized_notes.append(str(line_cfg.get("note_6")))
-                    elif n_str.startswith("8.") and line_cfg.get("note_8"):
-                        customized_notes.append(str(line_cfg.get("note_8")))
-                    else:
-                        customized_notes.append(n_str)
-                notes_to_use = customized_notes
-            sidebar_section.notes_section.notes_list = notes_to_use
-        else:
-            sidebar_section.notes_section.notes_list = default_notes
+        t_notes = _require_cfg(t_cfg, "notes", tpl_ctx)
+        notes_ctx = f"{tpl_ctx}.notes"
+        sidebar_section.notes_section.title = str(_require_cfg(t_notes, "title", notes_ctx))
+        sidebar_section.notes_section.title_color = int(_require_cfg(t_notes, "title_color", notes_ctx))
+        raw_notes = _require_cfg(t_notes, "notes_list", notes_ctx)
+        if not isinstance(raw_notes, list) or not raw_notes:
+            raise ValueError(f"Config key 'notes_list' in {notes_ctx} must be a non-empty list.")
+        notes_to_use = [str(n) for n in raw_notes]
+        if template_type == "brownfield":
+            customized_notes = []
+            for n_str in notes_to_use:
+                if n_str.startswith("6.") and line_cfg.get("note_6"):
+                    customized_notes.append(str(line_cfg["note_6"]))
+                elif n_str.startswith("8.") and line_cfg.get("note_8"):
+                    customized_notes.append(str(line_cfg["note_8"]))
+                else:
+                    customized_notes.append(n_str)
+            notes_to_use = customized_notes
+        sidebar_section.notes_section.notes_list = notes_to_use
 
         # Populate Title Block
-        t_tb = t_cfg.get("title_block", {})
+        t_tb = _require_cfg(t_cfg, "title_block", tpl_ctx)
+        tb_ctx = f"{tpl_ctx}.title_block"
         proj_cfg = cfg.get("project", {})
-        if template_type == "greenfield":
-            default_project = "NEW BROAD GAUGE RAILWAY LINE"
-        elif line_key == "2nd_line":
-            default_project = "PROPOSED 2nd LINE (DOUBLING) BETWEEN SECUNDERABAD - WADI STATIONS"
-        elif line_key == "4th_line":
-            default_project = "PROPOSED 3rd AND 4th LINES BETWEEN SECUNDERABAD - WADI STATIONS"
-        else:
-            default_project = "PROPOSED 3rd LINE BETWEEN SECUNDERABAD - WADI STATIONS"
 
-        sidebar_section.title_block_section.railway_zone = str(t_tb.get("railway_zone", proj_cfg.get("zone", "SOUTH CENTRAL RAILWAY")))
-        sidebar_section.title_block_section.division = str(t_tb.get("division", proj_cfg.get("division", "SECUNDERABAD DIVISION")))
-        if template_type == "brownfield":
-            proj_title = str(
-                line_cfg.get("project_title")
-                or t_tb.get("project_title")
-                or default_project
-            )
-        else:
-            proj_title = str(t_tb.get("project_title", t_tb.get("project_name", default_project)))
-        sidebar_section.title_block_section.project_title = proj_title
-        sidebar_section.title_block_section.plan_title = str(t_tb.get("plan_title", "WORKING PLAN AND SECTION"))
-        sidebar_section.title_block_section.drawing_prefix = str(t_tb.get("drawing_prefix", t_tb.get("cao_drawing_prefix", "CAO/C/TR/LS")))
-        sidebar_section.title_block_section.drawing_year = str(t_tb.get("drawing_year", "2026"))
-        sidebar_section.title_block_section.consultant_name = str(t_tb.get("consultant_name", "FLS DESIGN CONSULTANT"))
+        sidebar_section.title_block_section.railway_zone = str(
+            _require_any_cfg([t_tb, proj_cfg], ["railway_zone", "zone"], tb_ctx)
+        )
+        sidebar_section.title_block_section.division = str(
+            _require_any_cfg([t_tb, proj_cfg], ["division"], tb_ctx)
+        )
+        sidebar_section.title_block_section.project_title = str(
+            _require_any_cfg([line_cfg, t_tb, proj_cfg], ["project_title", "project_name", "name"], tb_ctx)
+        )
+        sidebar_section.title_block_section.plan_title = str(_require_cfg(t_tb, "plan_title", tb_ctx))
+        sidebar_section.title_block_section.drawing_prefix = str(
+            _require_any_cfg([t_tb], ["drawing_prefix", "cao_drawing_prefix"], tb_ctx)
+        )
+        sidebar_section.title_block_section.drawing_year = str(
+            t_tb.get("drawing_year", proj_cfg.get("drawing_year", ""))
+        )
+        sidebar_section.title_block_section.consultant_name = str(
+            _require_cfg(t_tb, "consultant_name", tb_ctx)
+        )
         raw_officers = t_tb.get("officers")
         if raw_officers and isinstance(raw_officers, list):
             sidebar_section.title_block_section.officers = [str(o) for o in raw_officers]
 
-        if template_type == "brownfield":
-            name = str(t_cfg.get("name", f"Brownfield {line_designation} Working Plan and Section"))
-        else:
-            name = str(t_cfg.get("name", f"{template_type.capitalize()} Railway Drawing Template"))
+        name = str(_require_cfg(t_cfg, "name", tpl_ctx))
 
         return cls(
             name=name,

@@ -68,7 +68,7 @@ def test_detect_api_endpoint():
     """Verify POST /detect endpoint parses uploaded KML and returns detection results synchronously."""
     client = TestClient(app)
     response = client.post(
-        "/detect",
+        "/api/v1/alignment-studio/detect",
         files={"file": ("corridor.kml", io.BytesIO(SYNTHETIC_KML), "application/vnd.google-earth.kml+xml")},
         data={"simplification_tolerance_m": "5.0", "minimum_deflection_deg": "0.5"},
     )
